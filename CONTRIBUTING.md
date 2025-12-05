@@ -19,7 +19,7 @@ or contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any addi
 
 Welcome issues and PRs related to the bugs and inefficiencies of out agent.
 
-In [launch/utilities/language_handler.py](launch/utilities/language_handler.py), you can see language-specific and operating-system-specific prompts and base images. 
+In [launch/utilities/language_handlers.py](launch/utilities/language_handlers.py), you can see language-specific and operating-system-specific prompts and base images. 
 Please help us improve these prompts and add new base images. 
 Base images need update when the latest version of a language updates. 
 Please add official new images if official sources provide them; 
