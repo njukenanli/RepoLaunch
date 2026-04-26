@@ -23,6 +23,11 @@ dependencies = [
     "pygithub"
 ]
 
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+]
+
 [project.scripts]
 launch = "launch.run:main"
 
@@ -32,3 +37,8 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = ["launch"]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: exercises real Docker runtime workflows and may pull large images",
+]
