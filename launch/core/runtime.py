@@ -6,6 +6,7 @@ file operations, and state management capabilities.
 """
 
 from __future__ import annotations
+from abc import ABC, abstractmethod
 import io
 import json
 import os
@@ -17,8 +18,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Optional
-import uuid
+from typing import Any, Literal, Optional
 
 import docker
 from docker.models.containers import Container
@@ -46,11 +46,7 @@ VAR_PATTERNS = {
     'py_interpreter_path': re.compile(r'"py_interpreter_path":\s*"([^"]*)"'),
 }
 
-class RegWrapper:
-    def __init__(self, reg: str):
-        self.reg = reg
-    def group(self, idx=0):
-        return self.reg
+available_platforms = Literal["linux", "windows", "android", "macos"]
 
 @dataclass
 class CmdOutputMetadata:
@@ -150,10 +146,10 @@ class CommandResult:
     
     Attributes:
         output (str): Command output text
-        metadata (Optional[CmdOutputMetadata]): Execution context metadata
+        metadata (CmdOutputMetadata): Execution context metadata
     """
     output: str
-    metadata: Optional[CmdOutputMetadata]
+    metadata: CmdOutputMetadata
 
     def to_observation(self, strip: bool = True) -> str:
         """
@@ -185,18 +181,213 @@ class CommandResult:
 exit code: {self.metadata.exit_code}
 """
 
-
-class SetupRuntime:
+class SetupRuntime(ABC): 
     """
     Docker container runtime for repository setup and testing.
     
     Manages a Docker container with persistent bash session, command execution,
     file operations, and container lifecycle management.
     """
+
+    container: Container
+    mnt_container: Optional[str] = None
+    mnt_host: Optional[str] = None
+    container_platform: available_platforms
+    # note: container_platform means the enviroment inside the container
+    # as windows os can run linux container, on windows computer you can also have container_platform="linux"
+    command_timeout: int # in minute
+    stopped: bool
+
+    @abstractmethod
+    def send_command(self, command: str, timeout: int|None = None) -> CommandResult:
+        pass
+
+    @abstractmethod
+    def apply_patch(self, patch: str, verbose: bool = False) -> bool:
+        pass
+    
+    def copy_to_container(self, src: str, dest: str) -> None:
+        """
+        Copy local file or directory 'src' into the container at path 'dest'.
+
+        If 'src' is a directory, all files within that directory (recursively)
+        are placed inside 'dest' in the container. If 'src' is a single file,
+        it is placed inside 'dest' (which is typically a directory).
+        """
+        tar_stream = io.BytesIO()
+        src = os.path.abspath(src)
+
+        with tarfile.open(fileobj=tar_stream, mode="w") as tar:
+            if os.path.isdir(src):
+                # Add directory contents so they appear directly under `dest`.
+                tar.add(src, arcname=".")
+            else:
+                # Add a single file using its basename.
+                tar.add(src, arcname=os.path.basename(src))
+
+        tar_stream.seek(0)
+
+        # Put the archive into the container. `dest` must exist and be a directory
+        # when copying directories, or you'll need to ensure it's the appropriate file path
+        # when copying a single file.
+        self.container.put_archive(dest, tar_stream)
+
+    def copy_dir_to_container(self, src: str, dest: str) -> None:
+
+        src = Path(src)
+        tar_stream = io.BytesIO()
+        with tarfile.open(fileobj=tar_stream, mode="w") as tar:
+            for file_path in src.rglob("*"):
+                arcname = file_path.relative_to(src)
+                tar.add(str(file_path), arcname=str(arcname))
+        tar_stream.seek(0)
+
+        self.container.put_archive(path=dest, data=tar_stream.read())
+        if self.platform in ("linux", "android"):
+            self.send_command(f'chown -R root:root "{dest}"')
+
+    def commit(self, image_name: str, tag: str = "latest", push: bool = False) -> str:
+        self.container.stop()
+
+        self.container.commit(
+            repository=image_name,
+            tag=tag,
+        )
+        print(f"Image {image_name}:{tag} created successfully.")
+
+        if push:
+            client = docker.from_env()
+            client.images.push(image_name, tag=tag)
+            print(f"Image {image_name}:{tag} pushed successfully.")
+
+        self.container.start()
+        return f"{image_name}:{tag}"
+
+    @staticmethod
+    def pull_image(image_name: str) -> bool:
+        """
+        Pull Docker image from registry.
+        
+        Args:
+            image_name (str): Name of the Docker image to pull
+            
+        Returns:
+            bool: True if successful, False if image not found
+        """
+        client = docker.from_env(timeout=3600) # pull should finish in 1 hour
+        try:
+            # Check if image exists locally
+            client.images.get(image_name)
+            return True
+        except docker.errors.ImageNotFound:
+            # Image doesn't exist locally, try to pull it
+            try:
+                client.images.pull(image_name)
+                return True
+            except docker.errors.ImageNotFound:
+                raise ValueError(f"Image {image_name} not found in registry")
+
+    def cleanup(self, prune_dangling: bool = True) -> None:
+        if self.stopped:
+            return
+        try:
+            self.container.stop()
+            self.container.remove(force=True)
+            self.stopped = True
+        except Exception as e:
+            print(f"Failed to stop container: {e}")
+        if prune_dangling:
+            try:
+                client = docker.from_env()
+                client.images.prune(filters={'dangling': True})
+            except Exception as e:
+                print(e, "...Skipping...")
+
+    def __del__(self):
+        self.cleanup()
+
+    @classmethod
+    @abstractmethod
+    def start_runtime_from_launch_image(
+        cls,
+        image_name: str,
+        instance_id: str,
+        command_timeout: int = 30,
+    ) -> SetupRuntime: 
+        pass
+
+    @classmethod
+    @abstractmethod
+    def start_runtime_from_base_image(
+        cls,
+        image_name: str,
+        instance: dict[str, Any],
+        command_timeout: int = 30,
+    ) -> SetupRuntime: 
+        pass
+
+    @staticmethod
+    def from_launch_image(
+        image_name: str,
+        instance_id: str,
+        platform: available_platforms = "linux",
+        command_timeout: int = 30
+    ) -> SetupRuntime:
+        if platform == "linux":
+            return LinuxRuntime.start_runtime_from_launch_image(
+                image_name,
+                instance_id,
+                command_timeout
+            )
+        elif platform == "windows":
+            return WindowsRuntime.start_runtime_from_launch_image(
+                image_name,
+                instance_id,
+                command_timeout
+            )
+        elif platform == "android":
+            return AndroidRuntime.start_runtime_from_launch_image(
+                image_name,
+                instance_id,
+                command_timeout
+            )
+        else:
+            raise ValueError(f"Container Platform {platform} unknown.")
+        
+    @staticmethod
+    def from_base_image(
+        image_name: str,
+        instance: dict[str, Any],
+        platform: available_platforms = "linux",
+        command_timeout: int = 30,
+    ) -> SetupRuntime:
+        if platform == "linux":
+            return LinuxRuntime.start_runtime_from_base_image(
+                image_name,
+                instance,
+                command_timeout
+            )
+        elif platform == "windows":
+            return WindowsRuntime.start_runtime_from_base_image(
+                image_name,
+                instance,
+                command_timeout
+            )
+        elif platform == "android":
+            return AndroidRuntime.start_runtime_from_base_image(
+                image_name,
+                instance,
+                command_timeout
+            )
+        else:
+            raise ValueError(f"Container Platform {platform} unknown.")
+    
+
+class LinuxRuntime(SetupRuntime):
+
     def __init__(
                     self, 
                     container: Container, 
-                    container_platform: str = "linux",
                     command_timeout: int = 30
                 ):
         """
@@ -206,59 +397,29 @@ class SetupRuntime:
             container (Container): Docker container instance to manage
         """
         self.container = container
-        self.platform = container_platform
+        self.platform = "linux"
         self.command_timeout=command_timeout
-        self.mnt_host = os.path.join(os.getcwd(), "tmp")
-        self.working_dir = r"C:\testbed" if self.platform == "windows" else r"/testbed"
-        self.mnt_container = self.working_dir + r"\mnt_tmp" if self.platform == "windows" else r"/testbed/mnt_tmp"
+        self.working_dir = r"/testbed"
         self.sock = self.container.attach_socket(
             params={"stdin": 1, "stdout": 1, "stderr": 1, "stream": 1}
         )
-        self.output_queue = queue.Queue()
+        self.output_queue: queue.Queue[bytes] = queue.Queue()
         self._start_output_thread()
         self._clear_initial_prompt()
-        if self.platform == "windows":
-            self.send_command(r'''
-function prompt {
-  if ($?) {$ec=0; $LASTEXITCODE=0} else {if ($LASTEXITCODE -ne 0) {$ec=$LASTEXITCODE} else {$ec=1}}
-  $u  = $env:USERNAME
-  $h  = $env:COMPUTERNAME
-  $wd = (Get-Location).Path
-  $pyCmd = Get-Command python -ErrorAction SilentlyContinue
-  $py = if ($pyCmd) {
-    if ($pyCmd.PSObject.Properties.Match('Path').Count -gt 0 -and $pyCmd.Path) { $pyCmd.Path }
-    elseif ($pyCmd.PSObject.Properties.Match('Source').Count -gt 0 -and $pyCmd.Source) { $pyCmd.Source }
-    else { '' }
-  } else { '' }
-  Write-Output ""
-  Write-Output "###PS1JSON###"
-  $obj = [ordered]@{
-    exit_code = $ec
-    username = $u
-    hostname = $h
-    working_dir = $wd
-    py_interpreter_path = $py
-  }
-  $obj | ConvertTo-Json -Compress
-  Write-Output "###PS1END###"
-  "PS $wd> "
-}
-''')
-        elif self.platform == "linux":
-            json_str = json.dumps(
-                {
-                    "exit_code": "$?",
-                    "username": r"\u",
-                    "hostname": r"\h",
-                    "working_dir": r"$(pwd)",
-                    "py_interpreter_path": r'$(which python 2>/dev/null || echo "")',
-                },
-                indent=2,
-            ).replace('"', r"\"")
-            ps1 = CMD_OUTPUT_PS1_BEGIN + json_str + CMD_OUTPUT_PS1_END + "\n"
-            self.send_command(
-                f'export PROMPT_COMMAND=\'export PS1="{ps1}"\'; export PS2=""'
-            )
+        json_str = json.dumps(
+            {
+                "exit_code": "$?",
+                "username": r"\u",
+                "hostname": r"\h",
+                "working_dir": r"$(pwd)",
+                "py_interpreter_path": r'$(which python 2>/dev/null || echo "")',
+            },
+            indent=2,
+        ).replace('"', r"\"")
+        ps1 = CMD_OUTPUT_PS1_BEGIN + json_str + CMD_OUTPUT_PS1_END + "\n"
+        self.send_command(
+            f'export PROMPT_COMMAND=\'export PS1="{ps1}"\'; export PS2=""'
+        )
         self.stopped = False
 
     def _stream_output(self):
@@ -280,11 +441,15 @@ function prompt {
         self.output_thread.start()
 
     def _clear_initial_prompt(self):
-        time.sleep(0.5)
+        time.sleep(1)
         while not self.output_queue.empty():
             self.output_queue.get()
 
-    def _read_raw_output(self, timeout=30) -> tuple[str, Optional[CmdOutputMetadata]]:
+    def _read_raw_output(self, timeout:int=30) -> tuple[str, Optional[CmdOutputMetadata]]:
+        '''
+        timeout: in seconds
+        '''
+        
         accumulated_output = ""
         start_time = time.time()
 
@@ -356,18 +521,10 @@ function prompt {
         '''
         timeout = self.command_timeout * 60 if timeout is None else timeout * 60 # in seconds
 
-        # Normalize newline semantics for interactive shells
-        if self.platform == "windows":
-            # For PowerShell, ensure CRLF line endings
-            command = command.strip().replace("\r\n", "\n").replace("\n", "\r\n")
-            # Add extra CRLF for multi-line blocks to signal completion
-            command += "\r\n\r\nprompt\r\n\r\n"
-        else:
-            if not command.endswith("\n"):
-                command += "\n"
+        if not command.endswith("\n"):
+            command += "\n"
 
-        while not self.output_queue.empty():
-            self.output_queue.get()
+        self._clear_initial_prompt()
 
         self._send_bytes(command.encode())
 
@@ -380,7 +537,7 @@ function prompt {
         for i in range(10):
             self._send_bytes(b"\x03")
 
-        kill_timeout = 5.0
+        kill_timeout = 5
         kill_output, kill_metadata = self._read_raw_output(timeout=kill_timeout)
 
         output = output + kill_output + "\n**Exited due to timeout**\n"
@@ -394,47 +551,10 @@ function prompt {
 
         return CommandResult(output=output, metadata=fallback_metadata)
 
-    def copy_to_container(self, src: str, dest: str) -> None:
-        """
-        Copy local file or directory 'src' into the container at path 'dest'.
+    def apply_patch(self, patch: str, verbose: bool = False) -> bool:
+        if (not hasattr(self, "mnt_container")) or (self.mnt_container is None) or (not hasattr(self, "mnt_host")) or (self.mnt_host is None):
+            raise RuntimeError(f"apply_patch method is only available for instances from `from_launch_image`")
 
-        If 'src' is a directory, all files within that directory (recursively)
-        are placed inside 'dest' in the container. If 'src' is a single file,
-        it is placed inside 'dest' (which is typically a directory).
-        """
-        tar_stream = io.BytesIO()
-        src = os.path.abspath(src)
-
-        with tarfile.open(fileobj=tar_stream, mode="w") as tar:
-            if os.path.isdir(src):
-                # Add directory contents so they appear directly under `dest`.
-                tar.add(src, arcname=".")
-            else:
-                # Add a single file using its basename.
-                tar.add(src, arcname=os.path.basename(src))
-
-        tar_stream.seek(0)
-
-        # Put the archive into the container. `dest` must exist and be a directory
-        # when copying directories, or you'll need to ensure it's the appropriate file path
-        # when copying a single file.
-        self.container.put_archive(dest, tar_stream)
-
-    def copy_dir_to_container(self, src: str, dest: str) -> None:
-
-        src = Path(src)
-        tar_stream = io.BytesIO()
-        with tarfile.open(fileobj=tar_stream, mode="w") as tar:
-            for file_path in src.rglob("*"):
-                arcname = file_path.relative_to(src)
-                tar.add(str(file_path), arcname=str(arcname))
-        tar_stream.seek(0)
-
-        self.container.put_archive(path=dest, data=tar_stream.read())
-        if self.platform == "linux":
-            self.send_command(f'chown -R root:root "{dest}"')
-
-    def apply_patch(self, patch: str, verbose = False) -> bool:
         output_temp = "\n\n<<<<<<PATCH FAILED TO APPLY CLEANLY\n{out}\n>>>>>>\n\n"
 
         filename = f"{uuid.uuid4()}.diff"
@@ -454,73 +574,12 @@ function prompt {
                 print(output_temp.format(out=res.output), flush=True)
             return False
     
-    def cleanup(self, prune_dangling = True) -> None:
-        if self.stopped:
-            return
-        try:
-            self.container.stop()
-            self.container.remove(force=True)
-            self.stopped = True
-        except Exception as e:
-            print(f"Failed to stop container: {e}")
-        if prune_dangling:
-            try:
-                client = docker.from_env()
-                client.images.prune(filters={'dangling': True})
-            except Exception as e:
-                print(e, "...Skipping...")
-
-    def commit(self, image_name: str, tag: str = "latest", push: bool = False) -> str:
-        self.container.stop()
-
-        self.container.commit(
-            repository=image_name,
-            tag=tag,
-        )
-        print(f"Image {image_name}:{tag} created successfully.")
-
-        if push:
-            client = docker.from_env()
-            client.images.push(image_name, tag=tag)
-            print(f"Image {image_name}:{tag} pushed successfully.")
-
-        self.container.start()
-        return f"{image_name}:{tag}"
-
-    def __del__(self):
-        self.cleanup()
-
-
-    @staticmethod
-    def pull_image(image_name: str) -> bool:
-        """
-        Pull Docker image from registry.
-        
-        Args:
-            image_name (str): Name of the Docker image to pull
-            
-        Returns:
-            bool: True if successful, False if image not found
-        """
-        client = docker.from_env(timeout=3600) # pull should finish in 1 hour
-        try:
-            # Check if image exists locally
-            client.images.get(image_name)
-            return True
-        except docker.errors.ImageNotFound:
-            # Image doesn't exist locally, try to pull it
-            try:
-                client.images.pull(image_name)
-                return True
-            except docker.errors.ImageNotFound:
-                raise ValueError(f"Image {image_name} not found in registry")
 
     @classmethod
-    def from_launch_image(
+    def start_runtime_from_launch_image(
         cls,
         image_name: str,
         instance_id: str,
-        platform: Literal["linux", "windows"] = "linux",
         command_timeout: int = 30,
     ) -> SetupRuntime:
         """
@@ -552,20 +611,12 @@ function prompt {
         extra_hosts = {"host.docker.internal": "host-gateway"} if "linux" in engine_os else None
         
         os.makedirs(os.path.join(os.getcwd(), "tmp"), exist_ok=True)
-        if platform == "windows":
-            shell_command = r"powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -NoExit"
-            working_dir = r"C:\testbed"
-            run_kwargs = {
-                "cpu_count": CPU_CORES,  # cpu_quota is Linux-only
-                "mem_limit": MEM_LIMIT,
-            }
-        else:
-            shell_command = "/bin/bash"
-            working_dir = "/testbed"
-            run_kwargs = {
-                "cpu_quota": int(CPU_CORES * 100000),
-                "mem_limit": MEM_LIMIT,
-            }
+        shell_command = "/bin/bash"
+        working_dir = "/testbed"
+        run_kwargs = {
+            "cpu_quota": int(CPU_CORES * 100000),
+            "mem_limit": MEM_LIMIT,
+        }
 
         container = client.containers.run(
             image_name,
@@ -590,20 +641,19 @@ function prompt {
 
         session = cls(
                     container, 
-                    container_platform=platform,
                     command_timeout=command_timeout,
                 )
+        
+        session.mnt_host = os.path.join(os.getcwd(), "tmp")
+        session.mnt_container = r"/testbed/mnt_tmp"
 
         return session
 
-
-
     @classmethod
-    def from_base_image(
+    def start_runtime_from_base_image(
         cls,
         image_name: str,
-        instance: dict,
-        platform: Literal["linux", "windows"] = "linux",
+        instance: dict[str, Any],
         command_timeout: int = 30,
     ) -> SetupRuntime:
         """
@@ -637,20 +687,12 @@ function prompt {
         extra_hosts = {"host.docker.internal": "host-gateway"} if "linux" in engine_os else None
         
         os.makedirs(os.path.join(os.getcwd(), "tmp"), exist_ok=True)
-        if platform == "windows":
-            shell_command = r"powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -NoExit"
-            working_dir = r"C:\testbed"
-            run_kwargs = {
-                "cpu_count": CPU_CORES,  # cpu_quota is Linux-only
-                "mem_limit": MEM_LIMIT,
-            }
-        else:
-            shell_command = "/bin/bash"
-            working_dir = "/testbed"
-            run_kwargs = {
-                "cpu_quota": int(CPU_CORES * 100000),
-                "mem_limit": MEM_LIMIT,
-            }
+        shell_command = "/bin/bash"
+        working_dir = "/testbed"
+        run_kwargs = {
+            "cpu_quota": int(CPU_CORES * 100000),
+            "mem_limit": MEM_LIMIT,
+        }
 
         container = client.containers.run(
             image_name,
@@ -669,7 +711,6 @@ function prompt {
 
         session = cls(
                     container, 
-                    container_platform=platform,
                     command_timeout=command_timeout,
                 )
 
@@ -679,12 +720,262 @@ function prompt {
         url = f'https://github.com/{instance["repo"]}.git'
         base_commit = instance["base_commit"]
 
-        if platform == "windows":
-            # 2) Ensure Git is installed (Chocolatey if possible; fallback to official silent installer).
-            #    - Chocolatey official install script: https://community.chocolatey.org/install.ps1
-            #    - git.install package params include /GitOnlyOnPath, /GitAndUnixToolsOnPath, /NoAutoCrlf, etc.
-            #    - Git for Windows silent flags are documented by the project itself.
-            session.send_command(r'''
+        session.send_command("apt update && apt install -y git")
+        res: CommandResult = session.send_command(
+            f"git config --global --add safe.directory /testbed; git init /testbed; cd /testbed; git remote add origin {url}; git fetch --depth 1 origin {base_commit}; git reset --hard {base_commit}"
+        )
+        
+        session.send_command("ls")
+        
+        if int(res.metadata.exit_code) != 0:
+            session.cleanup()
+            raise RuntimeError(f"Git clone/reset failed: \n{res.output}")
+
+        return session
+
+class WindowsRuntime(LinuxRuntime):
+
+    def __init__(
+                    self, 
+                    container: Container, 
+                    command_timeout: int = 30
+                ):
+        """
+        Initialize runtime with an existing Docker container.
+        
+        Args:
+            container (Container): Docker container instance to manage
+        """
+        self.container = container
+        self.platform = "windows"
+        self.command_timeout=command_timeout
+        self.working_dir = r"C:\testbed"
+        self.sock = self.container.attach_socket(
+            params={"stdin": 1, "stdout": 1, "stderr": 1, "stream": 1}
+        )
+        self.output_queue: queue.Queue[bytes] = queue.Queue()
+        self._start_output_thread()
+        self._clear_initial_prompt()
+        self.send_command(r'''
+function prompt {
+  if ($?) {$ec=0; $LASTEXITCODE=0} else {if ($LASTEXITCODE -ne 0) {$ec=$LASTEXITCODE} else {$ec=1}}
+  $u  = $env:USERNAME
+  $h  = $env:COMPUTERNAME
+  $wd = (Get-Location).Path
+  $pyCmd = Get-Command python -ErrorAction SilentlyContinue
+  $py = if ($pyCmd) {
+    if ($pyCmd.PSObject.Properties.Match('Path').Count -gt 0 -and $pyCmd.Path) { $pyCmd.Path }
+    elseif ($pyCmd.PSObject.Properties.Match('Source').Count -gt 0 -and $pyCmd.Source) { $pyCmd.Source }
+    else { '' }
+  } else { '' }
+  Write-Output ""
+  Write-Output "###PS1JSON###"
+  $obj = [ordered]@{
+    exit_code = $ec
+    username = $u
+    hostname = $h
+    working_dir = $wd
+    py_interpreter_path = $py
+  }
+  $obj | ConvertTo-Json -Compress
+  Write-Output "###PS1END###"
+  "PS $wd> "
+}
+''')
+        self.stopped = False
+
+    def send_command(self, command: str, timeout: int|None = None) -> CommandResult:
+        '''
+        timeout: deprecated arg for backward compatibility. In minute. If not specified use self.timeout from object inittialization.
+        '''
+        timeout = self.command_timeout * 60 if timeout is None else timeout * 60 # in seconds
+
+        # Normalize newline semantics for interactive shells
+        # For PowerShell, ensure CRLF line endings
+        command = command.strip().replace("\r\n", "\n").replace("\n", "\r\n")
+        # Add extra CRLF for multi-line blocks to signal completion
+        command += "\r\n\r\nprompt\r\n\r\n"
+
+        self._clear_initial_prompt()
+
+        self._send_bytes(command.encode())
+
+        output, metadata = self._read_raw_output(timeout=timeout)
+        if metadata is not None:
+            return CommandResult(output=output, metadata=metadata)
+
+        # handle timeout
+        # to kill the task completely, should Ctrl^C for several times
+        for i in range(10):
+            self._send_bytes(b"\x03")
+
+        kill_timeout = 5
+        kill_output, kill_metadata = self._read_raw_output(timeout=kill_timeout)
+
+        output = output + kill_output + "\n**Exited due to timeout**\n"
+        if kill_metadata is not None:
+            kill_metadata.exit_code = TIMEOUT_EXIT_CODE
+            return CommandResult(output=output, metadata=kill_metadata)
+
+        fallback_metadata = CmdOutputMetadata(
+            exit_code=TIMEOUT_EXIT_CODE,
+        )
+
+        return CommandResult(output=output, metadata=fallback_metadata)
+    
+
+    @classmethod
+    def start_runtime_from_launch_image(
+        cls,
+        image_name: str,
+        instance_id: str,
+        command_timeout: int = 30,
+    ) -> SetupRuntime:
+        """
+        Start a Docker container session for repository testing.
+        
+        Args:
+            image_name (str): Base Docker image name
+            instance (dict): SWE-bench instance data with repo info
+            platform: the platform of the container, linux or windows
+            
+        Returns:
+            SetupRuntime: Configured runtime session ready for command execution
+            
+        Raises:
+            RuntimeError: If Docker is not available
+        """
+        try:
+            docker.from_env().ping()
+        except docker.errors.DockerException:
+            raise RuntimeError("Docker is not installed or not running.")
+
+        _ = cls.pull_image(image_name)
+        client = docker.from_env(timeout=7200) # commit added layers should finish in 2 hours
+        container_id = instance_id.replace("/", "_")
+        container_name = f"git-launch-{container_id}-{str(uuid.uuid4())[:4]}"
+        info = client.version()
+        engine_os = (info.get("Os") or info.get("OSType") or "").lower() 
+        # which operating system this code is running on, note windows can run linux containers, so engine_os != (container) platform
+        extra_hosts = {"host.docker.internal": "host-gateway"} if "linux" in engine_os else None
+        
+        os.makedirs(os.path.join(os.getcwd(), "tmp"), exist_ok=True)
+        shell_command = r"powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -NoExit"
+        working_dir = r"C:\testbed"
+        run_kwargs = {
+            "cpu_count": CPU_CORES,  # cpu_quota is Linux-only
+            "mem_limit": MEM_LIMIT,
+        }
+
+        container = client.containers.run(
+            image_name,
+            name=container_name,
+            command=shell_command,
+            stdin_open=True,
+            tty=True,
+            detach=True,
+            environment={
+                "TERM": "xterm-mono",
+            },
+            working_dir=working_dir,
+            extra_hosts=extra_hosts,
+            volumes={
+                os.path.join(os.getcwd(), "tmp"): {
+                    "bind": os.path.join(working_dir, "mnt_tmp"),
+                    "mode": "rw",
+                }
+            },
+            **run_kwargs,
+        )
+
+        session = cls(
+                    container, 
+                    command_timeout=command_timeout,
+                )
+
+        session.mnt_container = os.path.join(working_dir, "mnt_tmp")
+        session.mnt_host = os.path.join(os.getcwd(), "tmp")
+
+        return session
+
+
+
+    @classmethod
+    def start_runtime_from_base_image(
+        cls,
+        image_name: str,
+        instance: dict[str, Any],
+        command_timeout: int = 30,
+    ) -> SetupRuntime:
+        """
+        Start a Docker container session for repository testing.
+        
+        Args:
+            image_name (str): Base Docker image name
+            instance (dict): SWE-bench instance data with repo info
+            platform: the platform of the container, linux or windows
+            
+        Returns:
+            SetupRuntime: Configured runtime session ready for command execution
+            
+        Raises:
+            RuntimeError: If Docker is not available
+        """
+        try:
+            docker.from_env().ping()
+        except docker.errors.DockerException:
+            raise RuntimeError("Docker is not installed or not running.")
+
+        _ = cls.pull_image(image_name)
+        client = docker.from_env(timeout=18000) 
+        # commit a new image built from scratch should require many many hours
+        # todo: make docker commit a separate thread / process, make it async to accelerate
+        container_id = instance["instance_id"].replace("/", "_")
+        container_name = f"git-launch-{container_id}-{str(uuid.uuid4())[:4]}"
+        info = client.version()
+        engine_os = (info.get("Os") or info.get("OSType") or "").lower() 
+        # which operating system this code is running on, note windows can run linux containers, so engine_os != (container) platform
+        extra_hosts = {"host.docker.internal": "host-gateway"} if "linux" in engine_os else None
+        
+        os.makedirs(os.path.join(os.getcwd(), "tmp"), exist_ok=True)
+        shell_command = r"powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -NoExit"
+        working_dir = r"C:\testbed"
+        run_kwargs = {
+            "cpu_count": CPU_CORES,  # cpu_quota is Linux-only
+            "mem_limit": MEM_LIMIT,
+        }
+
+        container = client.containers.run(
+            image_name,
+            name=container_name,
+            command=shell_command,
+            stdin_open=True,
+            tty=True,
+            detach=True,
+            environment={
+                "TERM": "xterm-mono",
+            },
+            working_dir=working_dir,
+            extra_hosts=extra_hosts,
+            **run_kwargs,
+        )
+
+        session = cls(
+                    container, 
+                    command_timeout=command_timeout,
+                )
+
+        # We avoid copying due to performance issues
+        # session.copy_dir_to_container(str(workspace), "/workspace")
+
+        url = f'https://github.com/{instance["repo"]}.git'
+        base_commit = instance["base_commit"]
+
+        # 2) Ensure Git is installed (Chocolatey if possible; fallback to official silent installer).
+        #    - Chocolatey official install script: https://community.chocolatey.org/install.ps1
+        #    - git.install package params include /GitOnlyOnPath, /GitAndUnixToolsOnPath, /NoAutoCrlf, etc.
+        #    - Git for Windows silent flags are documented by the project itself.
+        session.send_command(r'''
 # Skip if git already present
 if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) {
   try {
@@ -726,22 +1017,152 @@ if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) {
   if (Test-Path $gitCmd) { $env:PATH = "$gitCmd;$gitBin;$env:PATH" }
 }
 ''')
-            res: CommandResult = session.send_command(
-                r'git config --global --add safe.directory "C:\testbed"; git init "C:\testbed"; cd "C:\testbed"; git remote add origin {url}; git fetch --depth 1 origin {base}; git reset --hard {base}'.format(
-                    url=url, base=base_commit
-                )
+        res: CommandResult = session.send_command(
+            r'git config --global --add safe.directory "C:\testbed"; git init "C:\testbed"; cd "C:\testbed"; git remote add origin {url}; git fetch --depth 1 origin {base}; git reset --hard {base}'.format(
+                url=url, base=base_commit
             )
-        else: 
-            session.send_command("apt update && apt install -y git")
-            res: CommandResult = session.send_command(
-                f"git config --global --add safe.directory /testbed; git init /testbed; cd /testbed; git remote add origin {url}; git fetch --depth 1 origin {base_commit}; git reset --hard {base_commit}"
-            )
+        )
         
         session.send_command("ls")
         
         if int(res.metadata.exit_code) != 0:
-            self.cleanup()
-            raise RumtimeError(f"Git clone/reset failed: \n{res.output}")
+            session.cleanup()
+            raise RuntimeError(f"Git clone/reset failed: \n{res.output}")
+
+        return session
+    
+class AndroidRuntime(LinuxRuntime):
+    '''
+    recommended base image: {
+        "cimg/android:2026.03.1": "Android SDK and CLI tools installed",
+        "cimg/android:2026.03.1-node": "Node.js installed",
+        "cimg/android:2026.03.1-browsers":"Node.js, Selenium, and browser dependencies installed",
+        "cimg/android:2026.03.1-ndk": "Android Native Development Kit installed",
+    }
+    '''
+
+    def __init__(
+                    self,
+                    container: Container,
+                    command_timeout: int = 30
+                ):
+        super().__init__(container, command_timeout=command_timeout)
+        self.platform = "android"
+
+    @classmethod
+    def _start_container(
+        cls,
+        image_name: str,
+        container_id: str,
+        docker_timeout: int,
+        command_timeout: int,
+        mount_tmp: bool,
+    ) -> SetupRuntime:
+        try:
+            docker.from_env().ping()
+        except docker.errors.DockerException:
+            raise RuntimeError("Docker is not installed or not running.")
+
+        _ = cls.pull_image(image_name)
+        client = docker.from_env(timeout=docker_timeout)
+        container_name = f"git-launch-{container_id}-{str(uuid.uuid4())[:4]}"
+        info = client.version()
+        engine_os = (info.get("Os") or info.get("OSType") or "").lower()
+        extra_hosts = {"host.docker.internal": "host-gateway"} if "linux" in engine_os else None
+
+        working_dir = "/testbed"
+        os.makedirs(os.path.join(os.getcwd(), "tmp"), exist_ok=True)
+        run_kwargs = {
+            "cpu_quota": int(CPU_CORES * 100000),
+            "mem_limit": MEM_LIMIT,
+            "user": "root",
+        }
+        volumes = None
+        if mount_tmp:
+            volumes = {
+                os.path.join(os.getcwd(), "tmp"): {
+                    "bind": os.path.join(working_dir, "mnt_tmp"),
+                    "mode": "rw",
+                }
+            }
+
+        container = client.containers.run(
+            image_name,
+            name=container_name,
+            command="/bin/bash",
+            stdin_open=True,
+            tty=True,
+            detach=True,
+            environment={
+                "TERM": "xterm-mono",
+            },
+            working_dir=working_dir,
+            extra_hosts=extra_hosts,
+            volumes=volumes,
+            **run_kwargs,
+        )
+
+        session = cls(
+                    container,
+                    command_timeout=command_timeout,
+                )
+
+        if mount_tmp:
+            session.mnt_host = os.path.join(os.getcwd(), "tmp")
+            session.mnt_container = os.path.join(working_dir, "mnt_tmp")
 
         return session
 
+    @classmethod
+    def start_runtime_from_launch_image(
+        cls,
+        image_name: str,
+        instance_id: str,
+        command_timeout: int = 30,
+    ) -> SetupRuntime:
+        container_id = instance_id.replace("/", "_")
+        return cls._start_container(
+            image_name=image_name,
+            container_id=container_id,
+            docker_timeout=7200,
+            command_timeout=command_timeout,
+            mount_tmp=True,
+        )
+
+    @classmethod
+    def start_runtime_from_base_image(
+        cls,
+        image_name: str,
+        instance: dict[str, Any],
+        command_timeout: int = 30,
+    ) -> SetupRuntime:
+        container_id = instance["instance_id"].replace("/", "_")
+        session = cls._start_container(
+            image_name=image_name,
+            container_id=container_id,
+            docker_timeout=18000,
+            command_timeout=command_timeout,
+            mount_tmp=False,
+        )
+
+        url = f'https://github.com/{instance["repo"]}.git'
+        base_commit = instance["base_commit"]
+
+        session.send_command("command -v git >/dev/null || (apt-get update && apt-get install -y git)")
+        res: CommandResult = session.send_command(
+            f"git config --global --add safe.directory /testbed; git init /testbed; cd /testbed; git remote add origin {url}; git fetch --depth 1 origin {base_commit}; git reset --hard {base_commit}"
+        )
+
+        session.send_command("ls")
+
+        if int(res.metadata.exit_code) != 0:
+            session.cleanup()
+            raise RuntimeError(f"Git clone/reset failed: \n{res.output}")
+
+        return session
+
+class MacosRuntime(LinuxRuntime):
+    '''
+    recommended base image: sickcodes/docker-osx
+    '''
+    pass
