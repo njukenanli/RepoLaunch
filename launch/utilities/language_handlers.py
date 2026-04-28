@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Any
 
-from launch.core.runtime import available_platforms, SetupRuntime
+from launch.core.runtime import available_platforms, BaseRuntime
 from launch.utilities.timemachine import start_timemachine
 
 
@@ -30,13 +30,13 @@ class LanguageHandler(ABC):
             }
         elif platform == "macos":
             return {
-                "sickcodes/docker-osx:auto": "Pre-installed macOS Catalina VM in Docker-OSX with command-line shell access",
+                "sickcodes/docker-osx:auto": "a pre-installed macOS Catalina Virtual Machine provided by Docker-OSX",
             }
         else:
             raise ValueError(f"platform {platform} unknown or unimplemented...")
     
     @abstractmethod
-    def setup_environment(self, session: SetupRuntime, date: Optional[str] = None) -> Optional[Any]:
+    def setup_environment(self, session: BaseRuntime, date: Optional[str] = None) -> Optional[Any]:
         pass
     
     @abstractmethod
@@ -45,7 +45,7 @@ class LanguageHandler(ABC):
         pass
     
     @abstractmethod
-    def cleanup_environment(self, session: SetupRuntime, server: Optional[Any] = None):
+    def cleanup_environment(self, session: BaseRuntime, server: Optional[Any] = None):
         """Cleanup language-specific resources."""
         pass
 
@@ -69,7 +69,7 @@ class LanguageHandler(ABC):
     @staticmethod
     def get_macos_prompt(base_image: str) -> str:
         descriptions = {
-            "sickcodes/docker-osx:auto": "a pre-installed macOS Catalina VM provided by Docker-OSX",
+            "sickcodes/docker-osx:auto": "a pre-installed macOS Catalina Virtual Machine provided by Docker-OSX",
         }
         if base_image not in descriptions:
             raise ValueError(f"Unknown base image {base_image}")
@@ -105,7 +105,7 @@ class PythonHandler(LanguageHandler):
         else:
           return super().base_images(platform)
     
-    def setup_environment(self, session: SetupRuntime, date: Optional[str] = None) -> Optional[Any]:
+    def setup_environment(self, session: BaseRuntime, date: Optional[str] = None) -> Optional[Any]:
         """Setup Python environment with optional timemachine."""
         if not date:
             return None
@@ -128,7 +128,7 @@ class PythonHandler(LanguageHandler):
 
         return prompt
     
-    def cleanup_environment(self, session: SetupRuntime, server: Optional[Any] = None):
+    def cleanup_environment(self, session: BaseRuntime, server: Optional[Any] = None):
         """Cleanup Python environment."""
         if server:
             try:
@@ -175,7 +175,7 @@ class JavaScriptHandler(LanguageHandler):
         else:
             return super().base_images(platform)
     
-    def setup_environment(self, session: SetupRuntime, date: Optional[str] = None) -> Optional[Any]:
+    def setup_environment(self, session: BaseRuntime, date: Optional[str] = None) -> Optional[Any]:
         """Setup Node.js environment."""
         # No special server needed for JavaScript
         return None
@@ -212,7 +212,7 @@ npm install corepack@latest; corepack enable; corepack prepare pnpm@latest --act
 
         return prompt
     
-    def cleanup_environment(self, session: SetupRuntime, server: Optional[Any] = None):
+    def cleanup_environment(self, session: BaseRuntime, server: Optional[Any] = None):
         """Cleanup JavaScript environment."""
         # No special cleanup needed for JavaScript
         pass
@@ -259,7 +259,7 @@ class RustHandler(LanguageHandler):
         else:
             return super().base_images(platform)
     
-    def setup_environment(self, session: SetupRuntime, date: Optional[str] = None) -> Optional[Any]:
+    def setup_environment(self, session: BaseRuntime, date: Optional[str] = None) -> Optional[Any]:
         """Setup Rust environment."""
         # No special server needed for Rust
         return None
@@ -279,7 +279,7 @@ class RustHandler(LanguageHandler):
             prompt = self.get_macos_prompt(base_image) + prompt
         return prompt
     
-    def cleanup_environment(self, session: SetupRuntime, server: Optional[Any] = None):
+    def cleanup_environment(self, session: BaseRuntime, server: Optional[Any] = None):
         """Cleanup Rust environment."""
         # No special cleanup needed for Rust
         pass
@@ -318,7 +318,7 @@ class JavaHandler(LanguageHandler):
         else:
             return super().base_images(platform)
     
-    def setup_environment(self, session: SetupRuntime, date: Optional[str] = None) -> Optional[Any]:
+    def setup_environment(self, session: BaseRuntime, date: Optional[str] = None) -> Optional[Any]:
         """Setup Java environment."""
         # No special server needed for Java
         return None
@@ -339,7 +339,7 @@ class JavaHandler(LanguageHandler):
 
         return prompt
     
-    def cleanup_environment(self, session: SetupRuntime, server: Optional[Any] = None):
+    def cleanup_environment(self, session: BaseRuntime, server: Optional[Any] = None):
         """Cleanup Java environment."""
         # No special cleanup needed for Java
         pass
@@ -385,7 +385,7 @@ class GoHandler(LanguageHandler):
         else:
             return super().base_images(platform)
     
-    def setup_environment(self, session: SetupRuntime, date: Optional[str] = None) -> Optional[Any]:
+    def setup_environment(self, session: BaseRuntime, date: Optional[str] = None) -> Optional[Any]:
         """Setup Go environment."""
         # No special server needed for Go
         return None
@@ -405,7 +405,7 @@ class GoHandler(LanguageHandler):
             prompt = self.get_macos_prompt(base_image) + prompt
         return prompt
     
-    def cleanup_environment(self, session: SetupRuntime, server: Optional[Any] = None):
+    def cleanup_environment(self, session: BaseRuntime, server: Optional[Any] = None):
         """Cleanup Go environment."""
         # No special cleanup needed for Go
         pass
@@ -447,7 +447,7 @@ class CSharpHandler(LanguageHandler):
         else:
             return super().base_images(platform)
     
-    def setup_environment(self, session: SetupRuntime, date: Optional[str] = None) -> Optional[Any]:
+    def setup_environment(self, session: BaseRuntime, date: Optional[str] = None) -> Optional[Any]:
         """Setup C# environment."""
         # No special server needed for C#
         return None
@@ -468,7 +468,7 @@ class CSharpHandler(LanguageHandler):
             prompt = self.get_macos_prompt(base_image) + prompt
         return prompt
     
-    def cleanup_environment(self, session: SetupRuntime, server: Optional[Any] = None):
+    def cleanup_environment(self, session: BaseRuntime, server: Optional[Any] = None):
         """Cleanup C# environment."""
         # No special cleanup needed for C#
         pass
@@ -517,7 +517,7 @@ class CppHandler(LanguageHandler):
         else:
             return super().base_images(platform)
     
-    def setup_environment(self, session: SetupRuntime, date: Optional[str] = None) -> Optional[Any]:
+    def setup_environment(self, session: BaseRuntime, date: Optional[str] = None) -> Optional[Any]:
         """Setup C/C++ environment."""
         # No special server needed for C#
         return None
@@ -642,7 +642,7 @@ Examples to build a repo:
             prompt = self.get_macos_prompt(base_image) + prompt
         return prompt
     
-    def cleanup_environment(self, session: SetupRuntime, server: Optional[Any] = None):
+    def cleanup_environment(self, session: BaseRuntime, server: Optional[Any] = None):
         """Cleanup C/C++ environment."""
         # No special cleanup needed for C++
         pass

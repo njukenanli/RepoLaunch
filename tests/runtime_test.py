@@ -10,6 +10,10 @@ Firstly need to skip different tests for different platform:
 # test Windows Runtime
 # base images: mcr.microsoft.com/windows/server:ltsc2025
 
+# if os == "linux" or "wsl" and REPOLAUNCH_RUN_MACOS_INTEGRATION=1:
+# test MacosRuntime
+# base images: sickcodes/docker-osx:auto
+
 workflow:
 instance={
     "instance_id": "laurent22_joplin-a774",
@@ -41,17 +45,17 @@ index 0000000..7a754f4
 
 import os
 import platform as host_platform
+import warnings
 
 import docker
 import pytest
 from docker.errors import APIError, DockerException, ImageNotFound
 
-from launch.core.runtime import (
-    AndroidRuntime,
-    LinuxRuntime,
-    SetupRuntime,
-    WindowsRuntime,
-)
+from launch.core.runtime import SetupRuntime
+from launch.core.platforms.linux import LinuxRuntime
+from launch.core.platforms.windows import WindowsRuntime
+from launch.core.platforms.android import AndroidRuntime
+from launch.core.platforms.macos import MacosRuntime
 
 
 INSTANCE = {
@@ -90,6 +94,9 @@ def patch_runtime_constructor_io(monkeypatch):
     monkeypatch.setattr(LinuxRuntime, "_clear_initial_prompt", lambda self: None)
     monkeypatch.setattr(LinuxRuntime, "send_command", no_command_result)
     monkeypatch.setattr(WindowsRuntime, "send_command", no_command_result)
+    monkeypatch.setattr(MacosRuntime, "send_command", no_command_result)
+    monkeypatch.setattr(MacosRuntime, "_wait_until_shell_ready", lambda self: None)
+    monkeypatch.setattr(MacosRuntime, "_mount_swap_directory", lambda self: None)
 
 
 @pytest.mark.parametrize(
@@ -121,6 +128,15 @@ def patch_runtime_constructor_io(monkeypatch):
                 "mnt_container": r"/mnt_tmp",
             },
             id="android",
+        ),
+        pytest.param(
+            MacosRuntime,
+            {
+                "platform": "macos",
+                "working_dir": r"/Users/user/testbed",
+                "mnt_container": r"/Volumes/repolaunch_swap",
+            },
+            id="macos",
         ),
     ],
 )
@@ -160,7 +176,10 @@ def supported_integration_platforms() -> set[str]:
     if system == "windows":
         return {"windows"}
     if system == "linux":
-        return {"linux", "android"}
+        platforms = {"linux", "android"}
+        if os.environ.get("REPOLAUNCH_RUN_MACOS_INTEGRATION") == "1" and os.path.exists("/dev/kvm"):
+            platforms.add("macos")
+        return platforms
     return set()
 
 
@@ -198,11 +217,16 @@ def test_android_pull_image_requests_amd64_platform():
         pytest.param("linux", "ubuntu:26.04", id="linux"),
         pytest.param("android", "cimg/android:2026.03.1", id="android"),
         pytest.param("windows", "mcr.microsoft.com/windows/server:ltsc2025", id="windows"),
+        pytest.param("macos", "sickcodes/docker-osx:auto", id="macos"),
     ],
 )
 def test_runtime_integration_workflow(runtime_platform, base_image):
     if runtime_platform not in supported_integration_platforms():
-        pytest.skip(f"{runtime_platform} runtime is not supported on this host")
+        if runtime_platform == "macos" and host_platform.system().lower() == "linux":
+            warnings.warn("macos integration test uses a big linux container with macos vm inside. Due to efficiency macos support is not tested by default. If you want to test macos behaviour, install kvm and export REPOLAUNCH_RUN_MACOS_INTEGRATION=1.")
+            pytest.skip("MacosRuntime is not tested by default.")
+        else:
+            pytest.skip(f"{runtime_platform} runtime is not supported on this host")
 
     client = docker_client_or_skip()
     image_repo = "repolaunch_test"

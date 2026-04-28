@@ -15,7 +15,7 @@ from tornado.ioloop import IOLoop
 from tornado.routing import PathMatches
 from tornado.web import Application, RequestHandler
 
-from launch.core.runtime import SetupRuntime
+from launch.core.runtime import BaseRuntime
 
 MAIN_PYPI = "https://pypi.org/simple/"
 JSON_URL = "https://pypi.org/pypi/{package}/json"
@@ -194,12 +194,12 @@ def start_pypi_timemachine(cutoff_date, port=None, quiet=True):
     return PyPiServer(server, ioloop, thread, chosen_port)
 
 
-def start_timemachine(session: SetupRuntime, date: str) -> PyPiServer:
+def start_timemachine(session: BaseRuntime, date: str) -> PyPiServer:
     """
     Start time machine server and configure pip in container session.
     
     Args:
-        session (SetupRuntime): Container session to configure
+        session (BaseRuntime): Container session to configure
         date (str): ISO date string for package cutoff
         
     Returns:
