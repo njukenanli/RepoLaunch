@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Any
 
-from launch.core.runtime import SetupRuntime
+from launch.core.runtime import available_platforms, BaseRuntime
 from launch.utilities.timemachine import start_timemachine
 
 
@@ -15,21 +15,33 @@ class LanguageHandler(ABC):
         pass
     
     @abstractmethod
-    def base_images(self, platform = "linux") -> List[str]:
+    def base_images(self, platform: available_platforms = "linux") -> List[str] | dict[str, str]:
         """Return candidate base Docker images for this language."""
+        if platform == "linux":
+            return ["ubuntu:26.04", "ubuntu:24.04", "ubuntu:22.04", "ubuntu:20.04", "ubuntu:18.04"]
+        elif platform == "windows":
+            return ["mcr.microsoft.com/windows/server:ltsc2025", "mcr.microsoft.com/windows/server:ltsc2022"]
+        elif platform == "android":
+            return {
+                "cimg/android:2026.03.1": "Android SDK and CLI tools, Java, Gradle, Maven, Git installed",
+                "cimg/android:2026.03.1-node": "Android SDK and CLI tools, Java, Gradle, Maven, Git, AND Node.js installed",
+                "cimg/android:2026.03.1-browsers": "Android SDK and CLI tools, Java, Gradle, Maven, Git, AND Node.js, google-chrome installed",
+                "cimg/android:2026.03.1-ndk": "Android SDK image with Android Native Development Kit installed",
+            }
+        else:
+            raise ValueError(f"platform {platform} unknown or unimplemented...")
+    
+    @abstractmethod
+    def setup_environment(self, session: BaseRuntime, date: Optional[str] = None) -> Optional[Any]:
         pass
     
     @abstractmethod
-    def setup_environment(self, session: SetupRuntime, date: Optional[str] = None) -> Optional[Any]:
-        pass
-    
-    @abstractmethod
-    def get_setup_instructions(self, base_image: str, platform: str = "linux") -> str:
+    def get_setup_instructions(self, base_image: str, platform: available_platforms = "linux") -> str:
         """Get language-specific setup instructions for the agent."""
         pass
     
     @abstractmethod
-    def cleanup_environment(self, session: SetupRuntime, server: Optional[Any] = None):
+    def cleanup_environment(self, session: BaseRuntime, server: Optional[Any] = None):
         """Cleanup language-specific resources."""
         pass
 
@@ -37,6 +49,18 @@ class LanguageHandler(ABC):
     def get_test_cmd_instructions(self) -> str:
         """Get language-specific test command instructions for the agent."""
         pass
+    
+    @staticmethod
+    def get_android_prompt(base_image: str) -> str: 
+        descriptions = {
+                "cimg/android:2026.03.1": "Android SDK and CLI tools, Java, Gradle, Maven, Git installed",
+                "cimg/android:2026.03.1-node": "Android SDK and CLI tools, Java, Gradle, Maven, Git, AND Node.js installed",
+                "cimg/android:2026.03.1-browsers": "Android SDK and CLI tools, Java, Gradle, Maven, Git, AND Node.js, google-chrome installed",
+                "cimg/android:2026.03.1-ndk": "Android SDK image with Android Native Development Kit installed",
+        }
+        if base_image not in descriptions:
+            raise ValueError(f"Unknown base image {base_image}")
+        return f"You are in an Android development environment with {descriptions[base_image]}.\n\n"
 
 
 class PythonHandler(LanguageHandler):
@@ -46,10 +70,10 @@ class PythonHandler(LanguageHandler):
     def language(self) -> str:
         return "python"
     
-    def base_images(self, platform = "linux") -> List[str]:
+    def base_images(self, platform: available_platforms = "linux") -> List[str] | dict[str, str]:
         if platform == "linux":
           return [f"python:3.{v}" for v in range(6, 15)]
-        else:
+        elif platform == "windows":
           return [f"python:3.{v}" for v in [
               "14-windowsservercore-ltsc2025",
               "13-windowsservercore-ltsc2025",
@@ -58,8 +82,10 @@ class PythonHandler(LanguageHandler):
               "10-windowsservercore-ltsc2022",
               "9-windowsservercore-ltsc2022"
           ]]
+        else:
+          return super().base_images(platform)
     
-    def setup_environment(self, session: SetupRuntime, date: Optional[str] = None) -> Optional[Any]:
+    def setup_environment(self, session: BaseRuntime, date: Optional[str] = None) -> Optional[Any]:
         """Setup Python environment with optional timemachine."""
         if not date:
             return None
@@ -67,15 +93,20 @@ class PythonHandler(LanguageHandler):
         # Start pypi-timemachine server for historical package resolution
         return start_timemachine(session, date)
     
-    def get_setup_instructions(self, base_image: str, platform: str = "linux") -> str:
-        return """
+    def get_setup_instructions(self, base_image: str, platform: available_platforms = "linux") -> str:
+        prompt = """
 ### Python-Specific Instructions:
 - Make sure the package is installed from source in editable mode before running tests (e.g., `pip install -e .`)
 - Avoid using tox to run tests if possible as it's designed for CI. Read tox.ini to understand setup
 - Check requirements.txt, setup.py, or pyproject.toml for dependencies
 """
+
+        if platform == "android":
+            prompt = self.get_android_prompt(base_image) + prompt
+
+        return prompt
     
-    def cleanup_environment(self, session: SetupRuntime, server: Optional[Any] = None):
+    def cleanup_environment(self, session: BaseRuntime, server: Optional[Any] = None):
         """Cleanup Python environment."""
         if server:
             try:
@@ -114,18 +145,20 @@ class JavaScriptHandler(LanguageHandler):
     def language(self) -> str:
         return "javascript"
     
-    def base_images(self, platform = "linux") -> List[str]:
+    def base_images(self, platform: available_platforms = "linux") -> List[str] | dict[str, str]:
         if platform == "linux":
             return [f"node:{v}" for v in ["18", "20", "22", "24", "25"]]
-        else:
+        elif platform == "windows":
             return ["karinali20011210/windows_server:ltsc2025_nvm",]
+        else:
+            return super().base_images(platform)
     
-    def setup_environment(self, session: SetupRuntime, date: Optional[str] = None) -> Optional[Any]:
+    def setup_environment(self, session: BaseRuntime, date: Optional[str] = None) -> Optional[Any]:
         """Setup Node.js environment."""
         # No special server needed for JavaScript
         return None
     
-    def get_setup_instructions(self, base_image: str, platform: str = "linux") -> str:
+    def get_setup_instructions(self, base_image: str, platform: available_platforms = "linux") -> str:
         prompt= """
 ### JavaScript/Node.js-Specific Instructions:
 - Use npm, yarn, or pnpm to install dependencies (check package.json and lockfiles)
@@ -149,9 +182,13 @@ npm install corepack@latest; corepack enable; corepack prepare pnpm@latest --act
 
 
 """+prompt
+            
+        if platform == "android":
+            prompt = self.get_android_prompt(base_image) + prompt
+
         return prompt
     
-    def cleanup_environment(self, session: SetupRuntime, server: Optional[Any] = None):
+    def cleanup_environment(self, session: BaseRuntime, server: Optional[Any] = None):
         """Cleanup JavaScript environment."""
         # No special cleanup needed for JavaScript
         pass
@@ -190,19 +227,21 @@ class RustHandler(LanguageHandler):
     def language(self) -> str:
         return "rust"
     
-    def base_images(self, platform = "linux") -> List[str]:
+    def base_images(self, platform: available_platforms = "linux") -> List[str] | dict[str, str]:
         if platform == "linux": 
             return [f"rust:1.{v}" for v in range(70, 91)]
-        if platform == "windows":
+        elif platform == "windows":
             return [f"karinali20011210/rust-windows:1.{v}" for v in [70, 75, 80, 85, 90]]
+        else:
+            return super().base_images(platform)
     
-    def setup_environment(self, session: SetupRuntime, date: Optional[str] = None) -> Optional[Any]:
+    def setup_environment(self, session: BaseRuntime, date: Optional[str] = None) -> Optional[Any]:
         """Setup Rust environment."""
         # No special server needed for Rust
         return None
     
-    def get_setup_instructions(self, base_image: str, platform: str = "linux") -> str:
-        return """
+    def get_setup_instructions(self, base_image: str, platform: available_platforms = "linux") -> str:
+        prompt = """
 ### Rust-Specific Instructions:
 - Use `cargo build` to build the project
 - Use `cargo test` to run tests
@@ -210,8 +249,11 @@ class RustHandler(LanguageHandler):
 - Install system dependencies if needed (check Cargo.toml for sys crates)
 - Consider using `cargo install` for binary dependencies
 """
+        if platform == "android":
+            prompt = self.get_android_prompt(base_image) + prompt
+        return prompt
     
-    def cleanup_environment(self, session: SetupRuntime, server: Optional[Any] = None):
+    def cleanup_environment(self, session: BaseRuntime, server: Optional[Any] = None):
         """Cleanup Rust environment."""
         # No special cleanup needed for Rust
         pass
@@ -242,19 +284,21 @@ class JavaHandler(LanguageHandler):
     def language(self) -> str:
         return "java"
     
-    def base_images(self, platform = "linux") -> List[str]:
+    def base_images(self, platform: available_platforms = "linux") -> List[str] | dict[str, str]:
         if platform == "linux":
             return [f"eclipse-temurin:{v}-jdk-noble" for v in ["11", "17", "21"]]
-        if platform == "windows":
+        elif platform == "windows":
             return [f"eclipse-temurin:{v}-jdk-windowsservercore-ltsc2022" for v in ["11", "17", "21"]]
+        else:
+            return super().base_images(platform)
     
-    def setup_environment(self, session: SetupRuntime, date: Optional[str] = None) -> Optional[Any]:
+    def setup_environment(self, session: BaseRuntime, date: Optional[str] = None) -> Optional[Any]:
         """Setup Java environment."""
         # No special server needed for Java
         return None
     
-    def get_setup_instructions(self, base_image: str, platform: str = "linux") -> str:
-        return """
+    def get_setup_instructions(self, base_image: str, platform: available_platforms = "linux") -> str:
+        prompt = """
 ### Java-Specific Instructions:
 - Use Maven (`mvn test`) or Gradle (`gradle test`) to run tests
 - Use `mvn install` or `gradle build` to build the project
@@ -262,8 +306,12 @@ class JavaHandler(LanguageHandler):
 - Install system dependencies if needed
 - Use `mvn dependency:resolve` to download dependencies
 """
+        if platform == "android":
+            prompt = self.get_android_prompt(base_image) + prompt
+
+        return prompt
     
-    def cleanup_environment(self, session: SetupRuntime, server: Optional[Any] = None):
+    def cleanup_environment(self, session: BaseRuntime, server: Optional[Any] = None):
         """Cleanup Java environment."""
         # No special cleanup needed for Java
         pass
@@ -295,10 +343,10 @@ class GoHandler(LanguageHandler):
     def language(self) -> str:
         return "go"
     
-    def base_images(self, platform = "linux") -> List[str]:
+    def base_images(self, platform: available_platforms = "linux") -> List[str] | dict[str, str]:
         if platform == "linux":
             return [f"golang:1.{v}" for v in ["19", "20", "21", "22", "23", "24", "25"]]
-        if platform == "windows":
+        elif platform == "windows":
             return [f"golang:1.{v}" for v in ["19.0-windowsservercore", 
                                               "20.0-windowsservercore", 
                                               "21.0-windowsservercore", 
@@ -306,14 +354,16 @@ class GoHandler(LanguageHandler):
                                               "23.0-windowsservercore",
                                               "24.0-windowsservercore",
                                               "25.0-windowsservercore"]]
+        else:
+            return super().base_images(platform)
     
-    def setup_environment(self, session: SetupRuntime, date: Optional[str] = None) -> Optional[Any]:
+    def setup_environment(self, session: BaseRuntime, date: Optional[str] = None) -> Optional[Any]:
         """Setup Go environment."""
         # No special server needed for Go
         return None
     
-    def get_setup_instructions(self, base_image: str, platform: str = "linux") -> str:
-        return """
+    def get_setup_instructions(self, base_image: str, platform: available_platforms = "linux") -> str:
+        prompt = """
 ### Go-Specific Instructions:
 - Use `go mod download` to download dependencies
 - Use `go test ./...` to run all tests
@@ -321,8 +371,11 @@ class GoHandler(LanguageHandler):
 - Check go.mod for module dependencies
 - Use `go get` to install missing dependencies
 """
+        if platform == "android":
+            prompt = self.get_android_prompt(base_image) + prompt
+        return prompt
     
-    def cleanup_environment(self, session: SetupRuntime, server: Optional[Any] = None):
+    def cleanup_environment(self, session: BaseRuntime, server: Optional[Any] = None):
         """Cleanup Go environment."""
         # No special cleanup needed for Go
         pass
@@ -350,7 +403,7 @@ class CSharpHandler(LanguageHandler):
     def language(self) -> str:
         return "csharp"
     
-    def base_images(self, platform = "linux") -> List[str]:
+    def base_images(self, platform: available_platforms = "linux") -> List[str] | dict[str, str]:
         if platform == "linux":
             return [f"mcr.microsoft.com/dotnet/sdk:{v}" for v in ["6.0", "7.0", "8.0", "9.0", "10.0"]]
         elif platform == "windows":
@@ -361,14 +414,16 @@ class CSharpHandler(LanguageHandler):
                 "9.0-windowsservercore-ltsc2019",
                 "8.0-windowsservercore-ltsc2019",
             ]]
+        else:
+            return super().base_images(platform)
     
-    def setup_environment(self, session: SetupRuntime, date: Optional[str] = None) -> Optional[Any]:
+    def setup_environment(self, session: BaseRuntime, date: Optional[str] = None) -> Optional[Any]:
         """Setup C# environment."""
         # No special server needed for C#
         return None
     
-    def get_setup_instructions(self, base_image: str, platform: str = "linux") -> str:
-        return """
+    def get_setup_instructions(self, base_image: str, platform: available_platforms = "linux") -> str:
+        prompt = """
 ### C#-Specific Instructions:
 - Use `dotnet restore` to restore NuGet packages
 - Use `dotnet build` to build the project
@@ -377,8 +432,11 @@ class CSharpHandler(LanguageHandler):
 - Use `dotnet run` to run the application
 - Consider using `dotnet publish` for deployment builds
 """
+        if platform == "android":
+            prompt = self.get_android_prompt(base_image) + prompt
+        return prompt
     
-    def cleanup_environment(self, session: SetupRuntime, server: Optional[Any] = None):
+    def cleanup_environment(self, session: BaseRuntime, server: Optional[Any] = None):
         """Cleanup C# environment."""
         # No special cleanup needed for C#
         pass
@@ -408,7 +466,7 @@ class CppHandler(LanguageHandler):
     def language(self) -> str:
         return "c++"
     
-    def base_images(self, platform = "linux") -> List[str]:
+    def base_images(self, platform: available_platforms = "linux") -> List[str] | dict[str, str]:
         if platform == "linux": 
             return [
                 f"mcr.microsoft.com/devcontainers/cpp:{v}"
@@ -418,44 +476,24 @@ class CppHandler(LanguageHandler):
                     "1-ubuntu-24.04"
                 ]
             ]
-        if platform == "windows":
+        elif platform == "windows":
             return [
                 "karinali20011210/windows_server:ltsc2019_cmake_ninja_only",
                 "karinali20011210/windows_server:ltsc2022_cmake_ninja_only",
                 "karinali20011210/windows_server:ltsc2025_cmake_ninja_vsbuildtools_cl_msbuild"
             ]
+        else:
+            return super().base_images(platform)
     
-    def setup_environment(self, session: SetupRuntime, date: Optional[str] = None) -> Optional[Any]:
+    def setup_environment(self, session: BaseRuntime, date: Optional[str] = None) -> Optional[Any]:
         """Setup C/C++ environment."""
         # No special server needed for C#
         return None
     
-    def get_setup_instructions(self, base_image: str, platform: str = "linux") -> str:
-        if platform == "linux":
-            return """
-### C/C++ Specific Instructions:
-- Verify tools: 
-  - `cl ; gcc --version ; g++ --version ; clang --version ; cmake --version ; ctest --version ; ninja --version`
-- Configure with CMake:
-  - `cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=23`
-    - Use 20/17/11 if your project requires it
-    - Force a compiler if needed:
-      - GCC: `-DCMAKE_CXX_COMPILER=g++`
-      - Clang: `-DCMAKE_CXX_COMPILER=clang++`
-- Build the project:
-  - `cmake --build build --parallel`
-- Run tests:
-  - `ctest --test-dir build --output-on-failure`
-- Dependencies:
-  - `vcpkg` is available; integrate via `-DCMAKE_TOOLCHAIN_FILE=/path/to/vcpkg.cmake` or your preset.
-    (Conan works too if present in your repo.)
-- Run the app:
-  - `./build/<target_name>`
-- For other c/cpp repository variants not covered, decide how to build the repository yourself.
-"""
+    def get_setup_instructions(self, base_image: str, platform: available_platforms = "linux") -> str:
         if platform == "windows":
             if base_image == "karinali20011210/windows_server:ltsc2025_cmake_ninja_vsbuildtools_cl_msbuild":
-                return r"""
+                prompt = r"""
 ### C/C++ Specific Instructions:
 This is a windows server image with git, choco, cmake, ninja, and vsbuildtools2022 with cl.exe and msbuild installed.
 
@@ -495,7 +533,7 @@ Examples to build a repo:
   - `./build/<target_name>`
 """
             else:
-                return r"""
+                prompt = r"""
 ### C/C++ Specific Instructions:
 This is a minimal windows server image with only git, choco, cmake and ninja installed.
 You need to figure out how to install the required dependencies yourself. You can use web search if you are not sure.
@@ -544,8 +582,33 @@ Examples to build a repo:
 - Run the app:
   - `./build/<target_name>`
 """
+        else:
+            prompt = """
+### C/C++ Specific Instructions:
+- Verify tools: 
+  - `cl ; gcc --version ; g++ --version ; clang --version ; cmake --version ; ctest --version ; ninja --version`
+- Configure with CMake:
+  - `cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=23`
+    - Use 20/17/11 if your project requires it
+    - Force a compiler if needed:
+      - GCC: `-DCMAKE_CXX_COMPILER=g++`
+      - Clang: `-DCMAKE_CXX_COMPILER=clang++`
+- Build the project:
+  - `cmake --build build --parallel`
+- Run tests:
+  - `ctest --test-dir build --output-on-failure`
+- Dependencies:
+  - `vcpkg` is available; integrate via `-DCMAKE_TOOLCHAIN_FILE=/path/to/vcpkg.cmake` or your preset.
+    (Conan works too if present in your repo.)
+- Run the app:
+  - `./build/<target_name>`
+- For other c/cpp repository variants not covered, decide how to build the repository yourself.
+"""
+        if platform == "android":
+            prompt = self.get_android_prompt(base_image) + prompt
+        return prompt
     
-    def cleanup_environment(self, session: SetupRuntime, server: Optional[Any] = None):
+    def cleanup_environment(self, session: BaseRuntime, server: Optional[Any] = None):
         """Cleanup C/C++ environment."""
         # No special cleanup needed for C++
         pass
@@ -589,10 +652,16 @@ LANGUAGE_HANDLERS: Dict[str, LanguageHandler] = {
 
 
 def get_language_handler(language: str) -> LanguageHandler:
-    if language not in LANGUAGE_HANDLERS:
-        raise ValueError(f"Language '{language}' is not supported. Available languages: {list(LANGUAGE_HANDLERS.keys())}")
+    normed_lang = language.strip().lower().replace("-", "").replace("_", "")
+    if normed_lang in ["cs", "csharp"]:
+        normed_lang = "c#"
+    if normed_lang == "golang":
+        normed_lang = "go"
     
-    return LANGUAGE_HANDLERS[language]
+    if normed_lang not in LANGUAGE_HANDLERS:
+        raise ValueError(f"Language '{normed_lang}' is not supported. Available languages: {list(LANGUAGE_HANDLERS.keys())}")
+    
+    return LANGUAGE_HANDLERS[normed_lang]
 
 
 def get_supported_languages() -> List[str]:

@@ -47,9 +47,9 @@ Please recommend a suitable base Docker image. Consider:
 3. Use official images when possible
 {consideration}
 
-Select a base image from the following candidate list:
+Select one base image from the following candidate list:
 {candidate_images}
-Wrap the image name in a block like <image>ubuntu:20.04</image> to indicate your choice.
+Wrap the image name in a block like <image>ubuntu:20.04</image> , <image>python:3.12-windowsservercore-ltsc2025</image>, <image>cimg/android:2026.03.1-browsers</image>, to indicate your choice.
 """
         )
     ]
@@ -66,14 +66,14 @@ Wrap the image name in a block like <image>ubuntu:20.04</image> to indicate your
             messages.append(response)
             messages.append(
                 HumanMessage(
-                    content=f"""The image you selected({image}) is not in the candidate list: {candidate_images}. Please select again."""
+                    content=f"""The image you selected({image}) is not in the candidate list: {candidate_images}. Wrap the image name in a block like <image>ubuntu:20.04</image> , <image>python:3.12-windowsservercore-ltsc2025</image>, <image>cimg/android:2026.03.1-browsers</image>, to indicate your choice. Please select again."""
                 )
             )
         else:
             messages.append(response)
             messages.append(
                 HumanMessage(
-                    content="""Please wrap the image name in a block like <image>ubuntu:20.04</image> to indicate your choice."""
+                    content="""Wrap the image name in a block like <image>ubuntu:20.04</image> , <image>python:3.12-windowsservercore-ltsc2025</image>, <image>cimg/android:2026.03.1-browsers</image>, to indicate your choice. Please select again."""
                 )
             )
 

@@ -48,6 +48,20 @@ class SetupAction(BaseModel):
         Stop: stop the setup loop once you think the setup is complete, reply with following format:
             <stop></stop>
         """,
+        "android":
+        """
+        Command: run a command in the bash, reply with following format, your command should not require sudo or interactive input:
+            <command>bash command</command>
+            e.g. install build-essential: <command>apt-get install -y build-essential</command>
+            e.g. view file content: <command>cat README.md</command>
+        Search: search the web for if you need some information, generate query and reply with following format:
+            <search>the search query</search>
+            e.g. <search>how to fix 'No module named setuptools'</search>
+            e.g. <search>how to install python3 on ubuntu</search>
+            e.g. <search>how to create development environment for python3</search>
+        Stop: stop the setup loop once you think the setup is complete, reply with following format:
+            <stop></stop>
+        """,
         "windows":
         """
         Command: run a command in the windows powershell, reply with following format, your command should not require admin privilage or interactive input:
@@ -218,7 +232,7 @@ def setup(state: AgentState, max_steps: int) -> dict:
     logger = state["logger"]
     repo_structure = state["repo_structure"]
 
-    logger.info(f"setup state: {state.get("success" , "false")}, {state["trials"]}, {state["exception"]} ... ")
+    logger.info(f"setup state: {state.get('success', 'false')}, {state['trials']}, {state['exception']} ... ")
     
     # Get language-specific instructions
     language = state["language"]

@@ -17,9 +17,16 @@ or contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any addi
 
 ## Contributing to RepoLaunch Source Codes
 
+Current tests are under `./tests/`. To run regression tests:
+
+```bash
+pip install -e ".[test]"
+pytest -rA
+```
+
 1. Welcome issues and PRs related to the bugs and inefficiencies of out agent.
 
-2. Add unit tests to ./tests folder. Add GitHub workflow to run ./tests automatically.
+2. Contribute more unit / integration tests.
 
 3. We found that many threads created from launch/run.py would have "Result Empty Error", which means the last agent state is not saved to disk and not passed back to the main function in launch/run.py. We think it's mostly because docker commit in save.py takes too long time (usually 10min - 120 min) -- it will return read timeout and so often make the thread DEAD... Future works would make docker commit detached in a separate thread/process to solve the problem. Maybe there's also problem in docker concurrency and old Langchain agent apis... Please help us find that problem and fix it!
 
