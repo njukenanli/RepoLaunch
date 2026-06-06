@@ -4,6 +4,8 @@
 
 Pre-install: Git, Python>=3.12, Docker
 
+The docker dependency means running on containerized cluster pods is **NOT** feasible. Usually running one instances takes 4 GPUs with 16GB RAM, and the large repos like ClickHouse takes even 10 CPUs and 64GB RAM... The disk I/O rate is also critical for docker commit operations, so SSD (>= 1TB) disk is always preferred. In a word, **the performance of your machine directly determines the success rate**.
+
 Now RepoLaunch supports Linux, Windows and Android build. Android images are built from Linux images, so the settings are the same as Linux. Linux images and Android images can run on linux docker and Docker Desktop (windows/macos). 
 For helpers to run RepoLaunch on Windows container, see [Development-Windows.md](./Development-Windows.md)
 
@@ -64,14 +66,14 @@ RepoLaunch is a two step process, the first step is to setup the repo, installin
 | `dataset`          | string  |  Path to the dataset file                                                    |
 | `instance_id`      | string  |  Specific instance ID to run, null to run all instances in the dataset      |
 | `first_N_repos`    | integer |  Limit processing to first N repos (-1 for all repos)                       |
-| `max_workers`      | integer |  Number of parallel workers for processing                                   |
+| `max_workers`      | integer |  Number of parallel workers for processing. Usually one worker takes 4 CPUs and 16GB RAM, so decide num of workers based on your machine specifications. |
 | `overwrite`        | boolean |  Whether to overwrite existing results (false will skip existing repos)     |
 | `os`               | str     |  Which docker image os architecture to build on. Default to `linux` -- use linux containers on linux machines or wsl. Can also choose: `windows` -- use windows containers on windows host; `android` -- use android containers which are built from linux containers on linux machines or wsl.   |
-| `max_trials`       | integer |   how many rounds of setup-verify loop agent can attempt, default 1   |
-| `max_steps_setup`  | integer |   how many steps agent can attemp to setup the environment, default 20   |
-| `max_steps_verify` | integer |   how many steps agent can attemp to verify the setup, default 20   |
-| `cmd_timeout`      | integer |   time limit in minute of llm's each shell command, default 30 min. Suggested: 80 for Linux and 120 for Windows.   |
-| `image_prefix`     | string  | prefix of the output_image in the format {namespace}/{dockerhub_repo}, defaults to repolaunch/dev |
+| `max_trials`       | integer |   How many rounds of setup-verify loop agent can attempt, default 1   |
+| `max_steps_setup`  | integer |   How many steps agent can attemp to setup the environment, default 20   |
+| `max_steps_verify` | integer |   How many steps agent can attemp to verify the setup, default 20   |
+| `cmd_timeout`      | integer |   Time limit in minute of llm's each shell command, default 30 min. Suggested: 80 for Linux and 120 for Windows.   |
+| `image_prefix`     | string  |   Prefix of the output_image in the format {namespace}/{dockerhub_repo}, defaults to repolaunch/dev |
 
 
 ### Step 2 Organize
