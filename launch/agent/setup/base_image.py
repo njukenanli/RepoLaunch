@@ -5,6 +5,7 @@ from langchain.schema import HumanMessage
 
 from launch.agent.state import AgentState, auto_catch
 from launch.utilities.language_handlers import get_language_handler
+from launch.utilities.llm import form_llm_cost_log, update_accumulative_cost
 
 
 @auto_catch
@@ -22,6 +23,7 @@ def select_base_image(state: AgentState) -> dict:
         AgentState: Updated state with selected base image
     """
     llm = state["llm"]
+    cost = state["cost"]
     logger = state["logger"]
     language = state["language"]
     platform = state["platform"]
@@ -58,6 +60,7 @@ Wrap the image name in a block like <image>ubuntu:20.04</image> , <image>python:
     while not base_image or trials < 5:
         trials += 1
         response = llm.invoke(messages)
+        update_accumulative_cost(cost["preparation"], response)
         if "<image>" in response.content:
             image = response.content.split("<image>")[1].split("</image>")[0]
             if image in candidate_images:
@@ -77,8 +80,9 @@ Wrap the image name in a block like <image>ubuntu:20.04</image> , <image>python:
                 )
             )
 
-    logger.info(f"Selected base image: {base_image}")
+    logger.info(f"Selected base image: {base_image}  {form_llm_cost_log(response)}")
     return {
         "messages": messages,
         "base_image": base_image,
+        "cost": cost,
     }

@@ -16,6 +16,23 @@ logger = logging.getLogger(__name__)
 litellm.suppress_debug_info = True
 litellm.turn_off_message_logging = True
 
+def update_accumulative_cost(
+        d: dict[Literal["input_tokens", "output_tokens", "cost_usd"], int|float],
+        response: BaseMessage) -> None:
+    '''edit in-place'''
+    i: int = response.usage_metadata['input_tokens']
+    o: int = response.usage_metadata['output_tokens']
+    c: float = response.usage_metadata['cost']
+    d["input_tokens"] += i
+    d["output_tokens"] += o
+    d["cost_usd"] += c
+    return
+
+def form_llm_cost_log(response: BaseMessage) -> str:
+    i: int = response.usage_metadata['input_tokens']
+    o: int = response.usage_metadata['output_tokens']
+    c: float = response.usage_metadata['cost']
+    return f" -- <step_cost> input tokens: {i}, output tokens: {o}, cost usd: {c} </step_cost>"
 
 def logged_invoke(invoke_func):
     """
@@ -29,24 +46,6 @@ def logged_invoke(invoke_func):
     """
     @wraps(invoke_func)
     def wrapper(self, messages: List[BaseMessage]) -> BaseMessage:  
-
-        def _extract_usage_and_cost(message: BaseMessage) -> tuple[int | None, int | None, float | None]:
-            usage_metadata = getattr(message, "usage_metadata", None) or {}
-            response_metadata = getattr(message, "response_metadata", None) or {}
-
-            input_tokens = usage_metadata.get("input_tokens")
-            output_tokens = usage_metadata.get("output_tokens")
-            cost = response_metadata.get("cost")
-
-            token_usage = response_metadata.get("token_usage", {})
-            if input_tokens is None:
-                input_tokens = token_usage.get("prompt_tokens")
-            if output_tokens is None:
-                output_tokens = token_usage.get("completion_tokens")
-
-            return input_tokens, output_tokens, cost
-
-
         if self.log_folder is None:
             response: BaseMessage = invoke_func(self, messages)
             return response
@@ -65,7 +64,6 @@ def logged_invoke(invoke_func):
         log_file_path = os.path.join(log_folder, f"{next_number}.md")
 
         response: BaseMessage = invoke_func(self, messages)
-        input_tokens, output_tokens, cost = _extract_usage_and_cost(response)
 
         with open(log_file_path, "w", encoding="utf-8") as f:
             f.write("##### LLM INPUT #####\n")
@@ -73,9 +71,9 @@ def logged_invoke(invoke_func):
             f.write("\n##### LLM OUTPUT #####\n")
             f.write(response.pretty_repr())
             f.write("\n\n##### LLM METRICS #####\n")
-            f.write(f"- Input tokens: {input_tokens if input_tokens is not None else 'N/A'}\n")
-            f.write(f"- Output tokens: {output_tokens if output_tokens is not None else 'N/A'}\n")
-            f.write(f"- Cost (USD): ${cost:.8f}\n" if cost is not None else "- Cost (USD): N/A\n")
+            f.write(f"- Input tokens: {response.usage_metadata['input_tokens']}\n")
+            f.write(f"- Output tokens: {response.usage_metadata['output_tokens']}\n")
+            f.write(f"- Cost (USD): ${response.usage_metadata['cost']}\n")
         return response
     return wrapper
 
@@ -186,14 +184,6 @@ class LiteLLMModel:
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
                 "total_tokens": total_tokens,
-            },
-            response_metadata={
-                "model": self.completion_args.get("model", "N/A"),
-                "token_usage": {
-                    "prompt_tokens": input_tokens,
-                    "completion_tokens": output_tokens,
-                    "total_tokens": total_tokens,
-                },
                 "cost": cost,
             },
         )
@@ -207,10 +197,10 @@ class LiteLLMModel:
         choice = response.choices[0].message
         content = choice.content if getattr(choice, "content", None) is not None else ""
         usage = getattr(response, "usage", None)
-        input_tokens = getattr(usage, "prompt_tokens", None)
-        output_tokens = getattr(usage, "completion_tokens", None)
-        total_tokens = getattr(usage, "total_tokens", None)
-        cost = response._hidden_params.get("response_cost", 0.0)
+        input_tokens = getattr(usage, "prompt_tokens", None) or 0
+        output_tokens = getattr(usage, "completion_tokens", None) or 0
+        total_tokens = getattr(usage, "total_tokens", None) or 0
+        cost = response._hidden_params.get("response_cost", None) or 0.0
 
         return (content, input_tokens, output_tokens, total_tokens, cost)
     
@@ -229,10 +219,10 @@ class LiteLLMModel:
                         content += block.text
 
         usage = getattr(response, "usage", None)
-        input_tokens = getattr(usage, "input_tokens", None)
-        output_tokens = getattr(usage, "output_tokens", None)
-        total_tokens = getattr(usage, "total_tokens", None)
-        cost = response._hidden_params.get("response_cost", 0.0)
+        input_tokens = getattr(usage, "input_tokens", None) or 0
+        output_tokens = getattr(usage, "output_tokens", None) or 0
+        total_tokens = getattr(usage, "total_tokens", None) or 0
+        cost = response._hidden_params.get("response_cost", None) or 0.0
 
         return (content, input_tokens, output_tokens, total_tokens, cost)
 

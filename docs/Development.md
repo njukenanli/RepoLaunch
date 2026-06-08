@@ -107,14 +107,15 @@ LLM API logs (input/output/token_count/cost) will be saved in `{workspace_root}/
 
 | Field            | Description                                                                                      |
 |------------------|--------------------------------------------------------------------------------------------------|
-| `instance_id`    | Unique identifier of the instance                                                                |
+| `instance_id`    | Unique identifier of the instance                                   |
 | `docker_image_layers` | {"base_image": ..., "setup_layer": list[commands]}, can convert to Dockerfile |
-| `docker_image`   | Commited Image                               |
-| `setup_commands` | Records of shell commands used to set up the environment                                            |
-| `test_commands`  | Records of shell commands used to run the tests with verbose output                                                 |
-| `duration`       | Time taken to run the process (in minutes)         |
-| `completed`      | Boolean indicating whether the execution completed successfully                                  |
-| `exception`      | Error message or `null` if no exception occurred                                                 |
+| `docker_image`   | Commited Image                                                      |
+| `setup_commands` | Records of shell commands used to set up the environment            |
+| `test_commands`  | Records of shell commands used to run the tests with verbose output |
+| `duration`       | Time taken to run the process (in minutes)                          |
+| `cost`           | Accumulative LM API token count & cost of the setup stage           |
+| `completed`      | Boolean indicating whether the execution completed successfully     |
+| `exception`      | Error message or `null` if no exception occurred                    |
 
 Summary would be saved to `{workspace_root}/setup.jsonl`
 
@@ -125,13 +126,14 @@ The `setup_commands` and `test_commands` of the first step would be noisy, with 
 | Field            | Description                                                                                      |
 |------------------|--------------------------------------------------------------------------------------------------|
 | `docker_image_layers` | {"base_image": ..., "setup_layer": list[commands], "organize_layer":  list[commands]}, can convert to Dockerfile |
-| `organize_duration`       | Time taken to run the process (in minutes)         |
-| `organize_completed`      | Boolean indicating whether the organization attempt completed successfully                                  |
-| `rebuild_commands`    | Minimal commands to rebuild the repo instance                                                                |
-| `test_commands`     | Clean test commands                            |
-| `parse`   | python script to parse the test output intp testcase-status mapping                               |
-| `test_status` | Parsed testcase-status mapping in JSON                                         |
-| `pertest_command` | Command to specify a testcase to run, might do not exists                                         |
+| `organize_duration`   | Time taken to run the process (in minutes)                    |
+| `cost`                | Accumulative LM API token count & cost of the setup stage and the organize stage, respectively |
+| `organize_completed`  | Boolean indicating whether the organization attempt completed successfully   |
+| `rebuild_commands`    | Minimal commands to rebuild the repo instance                 |
+| `test_commands`       | Clean test commands                                           |
+| `parse`               | python script to parse the test output intp testcase-status mapping    |
+| `test_status`         | Parsed testcase-status mapping in JSON                        |
+| `pertest_command`     | Command to specify a testcase to run, might do not exists     |
 
 
 Summary would be saved to `{workspace_root}/organize.jsonl`

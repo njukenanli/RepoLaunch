@@ -14,6 +14,7 @@ from launch.agent.prompt import ReAct_prompt
 from launch.agent.state import AgentState, auto_catch
 from launch.core.runtime import SetupRuntime
 from launch.utilities.language_handlers import get_language_handler
+from launch.utilities.llm import form_llm_cost_log, update_accumulative_cost
 
 
 system_msg = """You are a developer. Your task is to install dependencies and set up a environment that is able to run the tests of the project.
@@ -230,10 +231,11 @@ def setup(state: AgentState, max_steps: int) -> dict:
         dict: Updated state with setup messages and commands
     """
     llm = state["llm"]
+    cost = state["cost"]
     logger = state["logger"]
     repo_structure = state["repo_structure"]
 
-    logger.info(f"setup state: {state.get('success', 'false')}, {state['trials']}, {state['exception']} ... ")
+    logger.info(f"Setup stage trial No.{state['trials']+1} ... ")
     
     # Get language-specific instructions
     language = state["language"]
@@ -254,7 +256,7 @@ def setup(state: AgentState, max_steps: int) -> dict:
         platform_hints = f"\n\nNote: This is a windows server image. Use windows powershell command.\n"
     hints += platform_hints
 
-    logger.info("-" * 10 + "Start setup conversation" + "-" * 10)
+    logger.info("-" * 10 + "Start setup agent conversation" + "-" * 10)
     messages = [
         SystemMessage(system_msg.format(
             base_image=state["base_image"],
@@ -268,7 +270,7 @@ def setup(state: AgentState, max_steps: int) -> dict:
             ) + hints
         ),
     ]
-    # logger.info(f"### Initial messages: {messages}")
+
     messages.extend(state["verify_messages"])
     if bool(state["verify_messages"]):
         messages.append(
@@ -299,8 +301,9 @@ def setup(state: AgentState, max_steps: int) -> dict:
             )
 
         response = llm.invoke(input_messages)
+        update_accumulative_cost(cost["setup"], response)
 
-        logger.info("\n" + response.pretty_repr())
+        logger.info(f"\n{response.pretty_repr()}\n\n{form_llm_cost_log(response)}\n")
         messages.append(response)
         action = parse_setup_action(response.content)
         observation = observation_for_setup_action(state, action)
@@ -313,10 +316,11 @@ def setup(state: AgentState, max_steps: int) -> dict:
         logger.info("\n" + message.pretty_repr())
         messages.append(message)
 
-    logger.info("-" * 10 + "End setup conversation" + "-" * 10)
+    logger.info("-" * 10 + "End setup agent conversation" + "-" * 10)
     return {
         "messages": messages,
         "setup_messages": messages[prefix_messages:],
         "setup_commands": commands,
         "commands": commands,
+        "cost": cost,
     }

@@ -10,6 +10,7 @@ from launch.agent.action_parser import ActionParser
 from launch.agent.prompt import ReAct_prompt
 from launch.agent.state import AgentState, auto_catch
 from launch.core.runtime import SetupRuntime
+from launch.utilities.llm import form_llm_cost_log, update_accumulative_cost
 
 system_msg: str = """You are a developer. Your task is to verify whether the environment for the given project is set up correctly. Your colleague has set up a Docker environment for the project. You need to verify if it can successfully run the tests of the project.
 - You interact with a Bash session inside this container.
@@ -139,9 +140,10 @@ def verify(state: AgentState, max_steps: int) -> dict:
     hints = "\n\n"
     session = state["session"]
     llm = state["llm"]
+    cost = state["cost"]
     logger = state["logger"]
     setup_commands = state["setup_commands"]
-    logger.info("-" * 10 + "Start verify conversation" + "-" * 10)
+    logger.info("-" * 10 + "Start verify agent conversation" + "-" * 10)
     setup_cmds = state["instance"].get("setup_cmds", "")
     setup_cmds_hints = f"\nHints: this is the build commands used to build this repo other developers used in other platforms that may help you understand how to run this repo. <command>{setup_cmds}</command>" if setup_cmds else ""
     hints += setup_cmds_hints
@@ -182,8 +184,9 @@ def verify(state: AgentState, max_steps: int) -> dict:
                 messages[:prefix_messages] + messages[-VERIFY_CONVERSATION_WINDOW:]
             )
         response = llm.invoke(input_messages)
-        # print(response.pretty_repr())
-        logger.info(response.pretty_repr())
+        update_accumulative_cost(cost["setup"], response)
+
+        logger.info(f"\n{response.pretty_repr()}\n\n{form_llm_cost_log(response)}\n")
         messages.append(response)
         action = parse_verify_action(response.content)
         if action.action == "command":
@@ -203,7 +206,7 @@ def verify(state: AgentState, max_steps: int) -> dict:
             break
 
     trials = state["trials"] + 1
-    logger.info("-" * 10 + "End verify conversation" + "-" * 10)
+    logger.info("-" * 10 + "End verify agent conversation" + "-" * 10)
     return {
         "messages": messages,
         "verify_messages": messages[prefix_messages:],
@@ -212,4 +215,5 @@ def verify(state: AgentState, max_steps: int) -> dict:
         "trials": trials,
         "success": success,
         "issue": issue,
+        "cost": cost,
     }

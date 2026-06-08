@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from launch.agent.action_parser import ActionParser
 from launch.agent.prompt import ReAct_prompt
 from launch.agent.state import AgentState, auto_catch
-from launch.core.runtime import SetupRuntime
+from launch.utilities.llm import form_llm_cost_log, update_accumulative_cost
 
 from launch.scripts.parser import run_get_pertest_cmd
 
@@ -64,7 +64,7 @@ Generate: Write a python script to generate a function to map each test case to 
         result[testcase] = f"mvn test  -Dtest={safe_testcase}  -Dsurefire.printSummary=true  -Dsurefire.useFile=false  -DtrimStackTrace=false"
     return result</python>
 Submit: Stop the exploration if you find the commands to run each testcase separately with verbose output and you think your python script to generate the command list is correct.
-    You do not need to output anything at this step because we would re-use your last python script and generated command list.
+    You do not need to output anything at this step because we would re-use your last python script and the last generated command list.
     Only output <submit>success</submit>
     If the repo really cannot specify one testcase to run, output <submit>failure</submit> honestly.
     """
@@ -88,10 +88,6 @@ class VerifyActionParser(ActionParser):
     def parse(self, response: str) -> VerifyAction | None:
         """Parse setup action from LLM response text."""
         response = self.clean_response(response)
-        
-        submit = self.extract_tag_content(response, "submit")
-        if submit:
-            return VerifyAction(action="submit", args=submit)
 
         script = self.extract_tag_content(response, "python")
         if script:
@@ -105,6 +101,10 @@ class VerifyActionParser(ActionParser):
         if search:
             return VerifyAction(action="search", args=search)
             
+        submit = self.extract_tag_content(response, "submit")
+        if submit:
+            return VerifyAction(action="submit", args=submit)
+
         return None
 
 
@@ -202,11 +202,10 @@ If you think it is impossible to run each testcase separately, give up by output
         raise state["exception"]
 
     hints = "\n\n"
-    session = state["session"]
     llm = state["llm"]
+    cost = state["cost"]
     logger = state["logger"]
 
-    logger.info(f"setup state: {state.get("success" , "false")}, {state["trials"]}, {state["exception"]} ... ")
     hints = "\n\n"
     platform_hints = ""
     if state["platform"] == "windows":
@@ -249,9 +248,11 @@ If you think it is impossible to run each testcase separately, give up by output
             input_messages = (
                 messages[:prefix_messages] + messages[-VERIFY_CONVERSATION_WINDOW:]
             )
+        
         response = llm.invoke(input_messages)
+        update_accumulative_cost(cost["organize"], response)
 
-        logger.info("\n" + response.pretty_repr())
+        logger.info(f"\n{response.pretty_repr()}\n\n{form_llm_cost_log(response)}\n")
         messages.append(response)
         action = parse_verify_action(response.content)
         observation = observation_for_verify_action(state, action)
@@ -264,7 +265,7 @@ If you think it is impossible to run each testcase separately, give up by output
         logger.info("\n" + message.pretty_repr())
         messages.append(message)
 
-    logger.info("-" * 10 + "End verify conversation" + "-" * 10)
+    logger.info("-" * 10 + "End unit test conversation" + "-" * 10)
     if success:
         try:
             pertest_command_dict = json.loads(pertest_command)
@@ -277,5 +278,6 @@ If you think it is impossible to run each testcase separately, give up by output
         "commands": commands,
         "unittest_generator": parser if success else "",
         "pertest_command": pertest_command_dict,
+        "cost": cost,
         # "success": success, # We decide not to count the success of this optional step into overall success
     }
