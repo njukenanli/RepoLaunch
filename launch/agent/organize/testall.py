@@ -12,6 +12,7 @@ from launch.agent.action_parser import ActionParser
 from launch.agent.prompt import ReAct_prompt
 from launch.agent.state import AgentState, auto_catch
 from launch.utilities.language_handlers import get_language_handler
+from launch.utilities.llm import form_llm_cost_log, update_accumulative_cost
 
 from launch.scripts.parser import run_parser
 
@@ -412,10 +413,10 @@ If successful, please submit.
 
     hints = "\n\n"
     llm = state["llm"]
+    cost = state["cost"]
     logger = state["logger"]
     setup_commands = state["setup_commands"]
 
-    logger.info(f"setup state: {state.get("success" , "false")}, {state["exception"]} ... ")
     hints = "\n\n"
     history_cmds = state["instance"].get("setup_cmds", [])
     history_cmds += state["instance"].get("test_cmds", [])
@@ -447,8 +448,7 @@ If successful, please submit.
     prefix_messages = len(messages)
     commands = state["commands"]
     step = 0
-    answer = None
-    logger.info("-" * 10 + "Start test conversation" + "-" * 10)
+    logger.info("-" * 10 + "Start organize-test conversation" + "-" * 10)
     while step < max_steps:
         step += 1
         # uses a window to avoid exceed context
@@ -458,9 +458,11 @@ If successful, please submit.
             input_messages = (
                 messages[:prefix_messages] + messages[-VERIFY_CONVERSATION_WINDOW:]
             )
+        
         response = llm.invoke(input_messages)
+        update_accumulative_cost(cost["organize"], response)
 
-        logger.info("\n" + response.pretty_repr())
+        logger.info(f"\n{response.pretty_repr()}\n\n{form_llm_cost_log(response)}\n")
         messages.append(response)
         action = parse_verify_action(response.content)
         observation = observation_for_verify_action(state, action)
@@ -472,7 +474,7 @@ If successful, please submit.
         logger.info("\n" + message.pretty_repr())
         messages.append(message)
 
-    logger.info("-" * 10 + "End verify conversation" + "-" * 10)
+    logger.info("-" * 10 + "End organize-test conversation" + "-" * 10)
     try:
         test_status = json.loads(test_status)
     except:
@@ -487,4 +489,5 @@ If successful, please submit.
         "parser": parser,
         "test_status": test_status,
         "success": bool(test_command.strip() and parser.strip() and test_status),
+        "cost": cost,
     }

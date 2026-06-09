@@ -99,6 +99,12 @@ def save_organize_result(state: AgentState) -> dict:
         "organize_layer": state["commands"]
     }
 
+    cost = history.get("cost", {})
+    if cost:
+        cost["organize"] = state["cost"]["organize"]
+    else:
+        cost = state["cost"]
+
     result = json.dumps(
             {
                 **history,
@@ -113,6 +119,7 @@ def save_organize_result(state: AgentState) -> dict:
                 "log_parser": state.get("parser", ""),
                 "unittest_generator": state.get("unittest_generator", ""),
                 "organize_duration": duration,
+                "cost": cost,
                 "organize_completed": state.get("success", False),
                 "exception": exception,
                 "repo_structure": state["repo_structure"],

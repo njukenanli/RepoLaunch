@@ -7,6 +7,7 @@ from langchain.schema import HumanMessage
 
 from launch.agent.state import AgentState, auto_catch
 from launch.utilities.get_repo_structure import view_repo_structure
+from launch.utilities.llm import form_llm_cost_log, update_accumulative_cost
 
 prompt = """Given this repository structure:
 ------ BEGIN REPOSITORY STRUCTURE ------
@@ -57,8 +58,10 @@ def locate_related_file(state: AgentState) -> dict:
         AgentState: Updated state with documentation content and related files
     """
     llm = state["llm"]
+    cost = state["cost"]
     logger = state["logger"]
     repo_structure = state["repo_structure"]
+
     locate_prompt = HumanMessage(
         content=prompt.format(structure=repo_structure)
     )
@@ -69,6 +72,7 @@ def locate_related_file(state: AgentState) -> dict:
         )
     
     response = llm.invoke([locate_prompt])
+    update_accumulative_cost(cost["preparation"], response)
     potential_files = [
         line.split("<file>")[1].split("</file>")[0].strip()
         for line in response.content.split("\n")
@@ -81,7 +85,7 @@ def locate_related_file(state: AgentState) -> dict:
     ]
     potential_files = list(set(potential_files))
 
-    logger.info(f"Potential files: {potential_files}")
+    logger.info(f"Potential files: {potential_files}  {form_llm_cost_log(response)}")
     logger.info("Start determine relevance of these files...")
     related_files = []
 
@@ -103,12 +107,10 @@ def locate_related_file(state: AgentState) -> dict:
 {content}
 ------ END FILE {file} ------"""
         determine_input = HumanMessage(content=determine_prompt.format(file=file_info))
-        try:
-            response = llm.invoke([determine_input])
-        except Exception:
-            logger.error(f"Error determining file: {file}")
-            continue
-        logger.info(f"File: {file} - {response.content}")
+        
+        response = llm.invoke([determine_input])
+        update_accumulative_cost(cost["preparation"], response)
+        logger.info(f"File: {file} - {response.content}  {form_llm_cost_log(response)}")
         if "<rel>Yes</rel>" in response.content:
             docs += f"File: {file}\n```\n"
             docs += content + "\n"
@@ -123,6 +125,7 @@ def locate_related_file(state: AgentState) -> dict:
         "docs": docs,
         # We do not require the full repo structure later
         "repo_structure": repo_structure,
+        "cost": cost,
     }
 
 

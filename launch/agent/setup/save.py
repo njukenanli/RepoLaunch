@@ -95,6 +95,7 @@ def save_setup_result(state: AgentState) -> dict:
                 "setup_commands": state["setup_commands"],
                 "test_commands": state["test_commands"],
                 "duration": duration,
+                "cost": state["cost"],
                 "completed": state.get("success", False),
                 "exception": exception,
                 "repo_structure": state["repo_structure"],

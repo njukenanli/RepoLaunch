@@ -15,7 +15,7 @@ pip install -e .
 
 ## Run RepoLaunch
 
-We provide an example input file `data/examples/dataset.jsonl` and a run config `data/examples/config.json` in [examples](../data/examples) to help you quickly go through the launch process.
+We provide an example input file `data/examples/dataset.jsonl` and a run config `data/examples/config.json` in [examples](../data/examples) to help you quickly go through the launch process. Expected output files are `data/examples/result.jsonl` and `data/examples/playground/`.
 
 Before getting started, please set your `TAVILY_API_KEY` environment variable. We use [tavily](https://www.tavily.com/) for LLM search engine support.
 
@@ -93,7 +93,7 @@ The configs required for this step:
 
 | Field              | Type    |  Description                                                                 |
 |--------------------|---------|-----------------------------------------------------------------------------|
-| `mode`             | dict     |   default to {"setup": true, "organize": false}, set to {"setup": true, "organize": true} to do the two steps together, or set to {"setup": false, "organize": true} to do the second step separately AFTER the first step is DONE    |
+| `mode`             | dict     |   default to `{"setup": true, "organize": false}`, set to `{"setup": true, "organize": true}` to do the two steps together, or set to `{"setup": false, "organize": true}` to do the second step separately AFTER the first step is DONE. By default the `testone` step in the organize stage to get the command to specify each single test to run is enabled; specify `"mode": {"setup": true, "organize": true, "get_pertest_cmd": false}` to disable this step in the organize stage.  |
 | `max_steps_organize` | integer |   how many steps agent can attemp to organize the commands, default 20   |
 
 
@@ -107,14 +107,15 @@ LLM API logs (input/output/token_count/cost) will be saved in `{workspace_root}/
 
 | Field            | Description                                                                                      |
 |------------------|--------------------------------------------------------------------------------------------------|
-| `instance_id`    | Unique identifier of the instance                                                                |
+| `instance_id`    | Unique identifier of the instance                                   |
 | `docker_image_layers` | {"base_image": ..., "setup_layer": list[commands]}, can convert to Dockerfile |
-| `docker_image`   | Commited Image                               |
-| `setup_commands` | Records of shell commands used to set up the environment                                            |
-| `test_commands`  | Records of shell commands used to run the tests with verbose output                                                 |
-| `duration`       | Time taken to run the process (in minutes)         |
-| `completed`      | Boolean indicating whether the execution completed successfully                                  |
-| `exception`      | Error message or `null` if no exception occurred                                                 |
+| `docker_image`   | Commited Image                                                      |
+| `setup_commands` | Records of shell commands used to set up the environment            |
+| `test_commands`  | Records of shell commands used to run the tests with verbose output |
+| `duration`       | Time taken to run the process (in minutes)                          |
+| `cost`           | Accumulative LM API token count & cost of the setup stage           |
+| `completed`      | Boolean indicating whether the execution completed successfully     |
+| `exception`      | Error message or `null` if no exception occurred                    |
 
 Summary would be saved to `{workspace_root}/setup.jsonl`
 
@@ -125,13 +126,14 @@ The `setup_commands` and `test_commands` of the first step would be noisy, with 
 | Field            | Description                                                                                      |
 |------------------|--------------------------------------------------------------------------------------------------|
 | `docker_image_layers` | {"base_image": ..., "setup_layer": list[commands], "organize_layer":  list[commands]}, can convert to Dockerfile |
-| `organize_duration`       | Time taken to run the process (in minutes)         |
-| `organize_completed`      | Boolean indicating whether the organization attempt completed successfully                                  |
-| `rebuild_commands`    | Minimal commands to rebuild the repo instance                                                                |
-| `test_commands`     | Clean test commands                            |
-| `parse`   | python script to parse the test output intp testcase-status mapping                               |
-| `test_status` | Parsed testcase-status mapping in JSON                                         |
-| `pertest_command` | Command to specify a testcase to run, might do not exists                                         |
+| `organize_duration`   | Time taken to run the process (in minutes)                    |
+| `cost`                | Accumulative LM API token count & cost of the setup stage and the organize stage, respectively |
+| `organize_completed`  | Boolean indicating whether the organization attempt completed successfully   |
+| `rebuild_commands`    | Minimal commands to rebuild the repo instance                 |
+| `test_commands`       | Clean test commands                                           |
+| `parse`               | python script to parse the test output intp testcase-status mapping    |
+| `test_status`         | Parsed testcase-status mapping in JSON                        |
+| `pertest_command`     | Command to specify a testcase to run, might do not exists     |
 
 
 Summary would be saved to `{workspace_root}/organize.jsonl`

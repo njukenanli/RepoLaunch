@@ -11,6 +11,7 @@ from launch.agent.action_parser import ActionParser
 from launch.agent.prompt import ReAct_prompt
 from launch.agent.state import AgentState, auto_catch
 from launch.scripts.parser import run_parser
+from launch.utilities.llm import form_llm_cost_log, update_accumulative_cost
 
 system_msg: str = """You are a developer specializing in test output analysis and parsing. Your task is to examine the test output, evaluate the current parser, and generate an improved, fully robust parser.
 
@@ -223,6 +224,7 @@ Parser executed successfully. Please analyze the results and submit if satisfied
 
     session = state["session"]
     llm = state["llm"]
+    cost = state["cost"]
     logger = state["logger"]
     
     # Get data from previous testall stage
@@ -274,7 +276,6 @@ Parser executed successfully. Please analyze the results and submit if satisfied
     
     prefix_messages = len(messages)
     step = 0
-    answer = None
     
     # Store test_output in state for testing
     state["test_output"] = test_output
@@ -292,7 +293,9 @@ Parser executed successfully. Please analyze the results and submit if satisfied
             )
             
         response = llm.invoke(input_messages)
-        logger.info("\n" + response.pretty_repr())
+        update_accumulative_cost(cost["organize"], response)
+
+        logger.info(f"\n{response.pretty_repr()}\n\n{form_llm_cost_log(response)}\n")
         messages.append(response)
         
         action = parse_parselog_action(response.content)
@@ -324,4 +327,5 @@ Parser executed successfully. Please analyze the results and submit if satisfied
         "test_status": final_test_status,
         "success": bool(final_test_status and final_parser),
         "test_output": test_output,
+        "cost": cost,
     }

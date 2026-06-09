@@ -6,7 +6,7 @@ import shutil
 import time
 from typing import Any, Literal, ClassVar  
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from launch.agent.action_parser import ActionParser
@@ -14,22 +14,8 @@ from launch.agent.prompt import ReAct_prompt
 from launch.agent.state import AgentState, auto_catch
 from launch.core.runtime import SetupRuntime
 from launch.utilities.language_handlers import get_language_handler
+from launch.utilities.llm import form_llm_cost_log, update_accumulative_cost
 
-
-# system_msg = """You are a developer. You have already setup all dependencies and build the repository in the current folder.
-# However, for the maintainance of the project, you need to organize the minimal commands to re-install ONLY modified packages and build the projects again after edits to the source code / package list.
-
-# - You are inside a docker container with source code already inside the container under the current directory called /testbed
-# - The dependencies of the repository have already been set up by you before.
-# - The full history commands that you used to try to set up the repo: {commands}
-
-# You can send commands in the container for several times to try to test the commands to re-build the repo and expolre the repo freely if you need more information.
-# You do not need to include the commands to run test cases because we will do it later.
-
-# The final objective is: 
-#     to "find the minimal commands to re-install ONLY modified packages AND re-build the project" again after package list / source code edits and "output your minimal re-install & re-build commands in one line".
-# You need to finish it in {steps} steps.
-# """
 system_msg = """You are a developer. You have already set up all dependencies and successfully built the repository in the current folder.
 Now, for project maintenance, you must organize the minimal commands required to re-install only modified packages and re-build the project after any edits to the source code or package list.
 
@@ -199,7 +185,7 @@ def reload_container(state: AgentState) -> dict:
 SETUP_CONVERSATION_WINDOW = 40
 
 
-def analyze_verification_with_llm(llm, submitted_commands: str, verification_output: str) -> bool:
+def analyze_verification_with_llm(llm, submitted_commands: str, verification_output: str) -> BaseMessage:
     """
     Use LLM to analyze verification results and determine if rebuild was successful.
     
@@ -235,15 +221,8 @@ Respond with EXACTLY one of these two words:
 
 Your response:"""
 
-    try:
-        response = llm.invoke([HumanMessage(analysis_prompt)])
-        analysis = response.content.strip().upper()
-        
-        # Return True if LLM says SUCCESS, False otherwise
-        return analysis == "SUCCESS"
-    except Exception as e:
-        # Fallback to return code check if LLM analysis fails
-        return analysis == "FAILURE"
+    response = llm.invoke([HumanMessage(analysis_prompt)])
+    return response
 
 @auto_catch
 def organize_setup(state: AgentState, max_steps: int) -> dict:
@@ -259,9 +238,9 @@ def organize_setup(state: AgentState, max_steps: int) -> dict:
     """
 
     llm = state["llm"]
+    cost = state["cost"]
     logger = state["logger"]
 
-    logger.info(f"setup state: {state.get("success" , "false")}, {state["trials"]}, {state["exception"]} ... ")
     hints = "\n\n"
     history_cmds = state["instance"].get("setup_cmds", [])
     history_cmds += state["instance"].get("test_cmds", [])
@@ -308,8 +287,9 @@ def organize_setup(state: AgentState, max_steps: int) -> dict:
             )
 
         response = llm.invoke(input_messages)
+        update_accumulative_cost(cost["organize"], response)
 
-        logger.info("\n" + response.pretty_repr())
+        logger.info(f"\n{response.pretty_repr()}\n\n{form_llm_cost_log(response)}\n")
         messages.append(response)
         action = parse_setup_action(response.content)
         if action and action.action == "command":
@@ -328,9 +308,12 @@ def organize_setup(state: AgentState, max_steps: int) -> dict:
             verification_output = verification_result.to_observation()
             
             # Use LLM to analyze verification results instead of just checking return code
-            verification_success = analyze_verification_with_llm(
+            response = analyze_verification_with_llm(
                 llm, submitted_commands, verification_output
             )
+            update_accumulative_cost(cost["organize"], response)
+            logger.info(form_llm_cost_log(response))
+            verification_success = "SUCCESS" in response.content.strip().upper()
             
             if verification_success:
                 # Verification passed according to LLM analysis
@@ -356,13 +339,14 @@ def organize_setup(state: AgentState, max_steps: int) -> dict:
         logger.info("\n" + message.pretty_repr())
         messages.append(message)
 
-    logger.info("-" * 10 + "End rebuild organization conversation" + "-" * 10)
+    logger.info("-" * 10 + "End rebuild conversation" + "-" * 10)
     return {
         "session": state["session"],
         "messages": messages,
         "commands": commands,
         "setup_messages": messages[prefix_messages:],
         "setup_commands": [answer] if answer else [],
-        "success": (answer is not None)
+        "success": (answer is not None),
+        "cost": cost,
     }
 

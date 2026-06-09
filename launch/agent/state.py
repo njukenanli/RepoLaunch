@@ -78,6 +78,7 @@ class AgentState(State):
     unittest_generator: str | None
     original_parser: str | None
     original_test_status: dict[str, str] | None
+    cost: dict[Literal["preparation","setup","organize"], dict[Literal["input_tokens","output_tokens","cost_usd"], int|float]]
     result: str
     command_timeout: int # minute
 
@@ -161,6 +162,23 @@ class AgentState(State):
             unittest_generator=None,
             original_parser=None,
             original_test_status=None,
+            cost={
+                "preparation": {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cost_usd": 0.0,
+                },
+                "setup": {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cost_usd": 0.0,
+                },
+                "organize": {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cost_usd": 0.0,
+                },
+            },
             result="",
             command_timeout=command_timeout,
         )
